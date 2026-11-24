@@ -4,7 +4,7 @@
 #   - the binary's --version names WHIMBREL_COMMIT (required; CI sets it to the commit built);
 #   - a macOS binary is built for its target's architecture alone and needs no macOS newer than
 #     MACOSX_DEPLOYMENT_TARGET;
-#   - a Linux binary is statically linked.
+#   - a Linux binary is static: readelf finds no interpreter and no needed shared library.
 #
 # Runs in CI and on a Mac: WHIMBREL_COMMIT=$(git rev-parse HEAD) MACOSX_DEPLOYMENT_TARGET=13.0 \
 #   cargo build --release --target x86_64-apple-darwin && scripts/prove x86_64-apple-darwin
@@ -36,9 +36,14 @@ for b in "${BINS[@]}"; do
       [[ $minos == "$MACOSX_DEPLOYMENT_TARGET" ]] || fail "$b needs macOS $minos, not $MACOSX_DEPLOYMENT_TARGET"
       ;;
     *-linux-*)
-      kind=$(file -b "$f")
-      echo "$b: $kind"
-      [[ $kind == *"statically linked"* ]] || fail "$b isn't statically linked"
+      # Static means nothing to load at run time: no interpreter and no shared libraries. Asked
+      # of readelf, since file words it two ways ("statically linked", and "static-pie linked"
+      # on x86-64 musl). file's line is still printed for the log.
+      echo "$b: $(file -b "$f")"
+      headers=$(readelf -l "$f") || fail "readelf can't read $b's program headers"
+      dynamic=$(readelf -d "$f") || fail "readelf can't read $b's dynamic section"
+      if grep -q 'INTERP' <<<"$headers"; then fail "$b names an interpreter, so it isn't static"; fi
+      if grep -q '(NEEDED)' <<<"$dynamic"; then fail "$b needs shared libraries, so it isn't static"; fi
       ;;
     *) fail "no proof for target $target" ;;
   esac
