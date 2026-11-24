@@ -2,21 +2,34 @@
 
 A friendly watch for your hosts.
 
-whimbrel checks a machine on a schedule and tells you when something changes: once when it goes
-wrong, once when it's fixed, and a reminder a day while it stays broken. It checks disks, file
-permissions, logs for leaked secrets and journald dropping lines, and it reads results from your
-own scripts, so anything you can check from a shell, it can watch.
+whimbrel checks a machine on a schedule and tells you when something changes. It sends one alert
+when a problem starts, one when the problem is fixed, and a daily reminder while the problem
+remains.
 
-It remembers what each alert channel was actually told. If an alert didn't get through, the next
-one that does says what you missed, including problems that came and went in between, and a
-recovery is never lost.
+whimbrel has checks for the following:
 
-It's for a small server or a home machine. It runs once per invocation from your scheduler (a
-systemd timer, launchd or cron), keeps its state in one directory, and sends to a Slack incoming
-webhook or to iMessage through a BlueBubbles server. Secrets are read from files you point it at,
-never written in its config.
+- Disk usage
+- File ownership and permissions
+- Secrets that leak into logs
+- Log lines that journald drops
+
+It also reads results from your own scripts, so it can watch anything that you can check from a
+shell.
+
+whimbrel remembers what it told each alert channel. If an alert doesn't get through, the next
+alert that does get through says what you missed, including problems that started and ended in
+between. A recovery is never lost.
+
+whimbrel is designed for a small server or a home machine:
+
+- It runs once per invocation from your scheduler: a systemd timer, launchd, or cron.
+- It keeps its state in one directory.
+- It sends alerts to a Slack incoming webhook, or to iMessage through a BlueBubbles server.
+- It reads secrets from files that you name. You never write a secret in the config file.
 
 ## What an alert looks like
+
+The following alert reports two problems:
 
 ```text
 Needs you soon:
@@ -24,20 +37,20 @@ The web server's disk is 93% full. See `df -h /`.
 The nightly backup hasn't finished since yesterday. See `journalctl -u backup`.
 ```
 
-and later, when both are fixed:
+When both problems are fixed, whimbrel sends the following:
 
 ```text
 All clear on the web server: the disk and the nightly backup are back to normal.
 ```
 
-Every problem is one plain sentence saying what's wrong, then one saying what to run about it,
-with the command in backticks.
+Each problem is one plain sentence that says what's wrong, followed by one sentence that says
+what to run, with the command in backticks.
 
-## Install
+## Install whimbrel
 
-Each release has an archive for Linux on ARM and on x86-64 (statically linked, so any
-distribution) and for macOS 13 or later on Apple silicon and on Intel, with a checksum and build
-provenance. Pick the target for your machine:
+Each release includes an archive for each of the following targets, with a checksum and build
+provenance. The Linux binaries are statically linked, so they run on any distribution. The macOS
+binaries require macOS 13 or later.
 
 | Machine | Target |
 |---|---|
@@ -45,6 +58,9 @@ provenance. Pick the target for your machine:
 | Linux, x86-64 | `x86_64-unknown-linux-musl` |
 | Mac, Apple silicon | `aarch64-apple-darwin` |
 | Mac, Intel | `x86_64-apple-darwin` |
+
+To download, verify, and unpack a release, set `t` to the target for your machine and run the
+following commands:
 
 ```sh
 v=0.3.0 t=x86_64-unknown-linux-musl
@@ -54,10 +70,12 @@ gh attestation verify whimbrel-$v-$t.tar.gz --repo kmsquire/whimbrel \
 tar xzf whimbrel-$v-$t.tar.gz
 ```
 
-whimbrel runs as root, so it must live where only root can change it: every directory from `/`
-down to it must belong to root and be writable by root alone. On a Mac with Homebrew,
-`/usr/local/bin` belongs to your own account, so the Mac path below is a directory of whimbrel's
-own:
+Because whimbrel runs as root, make sure that only root can change the binary. Every directory
+from `/` down to the binary must belong to root and be writable by root alone. On a Mac that has Homebrew,
+`/usr/local/bin` belongs to your own account, so the Mac path in the following commands is a
+directory that only whimbrel uses.
+
+To create the directory and check its ownership, run the following commands:
 
 ```sh
 B=/usr/local/bin        # Mac: B=/opt/whimbrel/bin
@@ -69,31 +87,39 @@ d=$B; until [ "$d" = / ]; do
 done
 ```
 
-If that prints anything, fix the directory it names, or pick another `B`, before going on. Then:
+If the commands print anything, fix the directory that the output names, or choose another value
+for `B`, before you continue. Then install the binary:
 
 ```sh
 sudo install -m 755 whimbrel-$v-$t/whimbrel "$B/"
 ```
 
-Anywhere else, build it with a Rust toolchain: `cargo install --locked --git
-https://github.com/kmsquire/whimbrel --tag v0.3.0`.
+On any other platform, build whimbrel with a Rust toolchain:
 
-## From nothing to a first alert
+```sh
+cargo install --locked --git https://github.com/kmsquire/whimbrel --tag v0.3.0
+```
 
-These steps run whimbrel as root, hourly. Everything it keeps goes in one directory, `W` below:
+## Send your first alert
 
-| | Linux | Mac |
+The following steps set up whimbrel to run hourly as root. whimbrel keeps its config and secret
+files in one directory, which the steps call `W`.
+
+| Item | Linux | Mac |
 |---|---|---|
-| `W`, the config and its secret files | `/etc/whimbrel` | `/Library/Application Support/whimbrel` |
+| `W`, the config file and its secret files | `/etc/whimbrel` | `/Library/Application Support/whimbrel` |
 | `state_dir` | `/var/lib/whimbrel` | `/Library/Application Support/whimbrel/state` |
-| The disk to watch | `/` | `/System/Volumes/Data` (`/` is the sealed system volume) |
+| The disk to watch | `/` | `/System/Volumes/Data`, because `/` is the sealed system volume |
 | The binary | `/usr/local/bin/whimbrel` | `/opt/whimbrel/bin/whimbrel` |
-| The schedule | a systemd timer | a LaunchDaemon |
+| The schedule | A systemd timer | A LaunchDaemon |
 
-The examples show Linux's paths; on a Mac, use the Mac column.
+The examples use the Linux paths. On a Mac, use the paths in the Mac column.
 
-1. Make the config, readable and writable by root alone. whimbrel refuses a config another
-   account can write, since the config names programs it runs.
+1. Create the config file, and make it readable and writable by root alone. whimbrel refuses a
+   config file that another account can write, because the config file names programs that
+   whimbrel runs.
+
+   Create the file and open it in an editor:
 
    ```sh
    W=/etc/whimbrel        # Mac: W="/Library/Application Support/whimbrel"
@@ -101,6 +127,8 @@ The examples show Linux's paths; on a Mac, use the Mac column.
    sudo install -m 600 /dev/null "$W/whimbrel.toml"
    sudo -e "$W/whimbrel.toml"
    ```
+
+   Add the following configuration:
 
    ```toml
    host = "the web server"
@@ -116,24 +144,27 @@ The examples show Linux's paths; on a Mac, use the Mac column.
    kind = "print"
    ```
 
-2. Try it. A dry run shows what each channel would be sent and changes nothing:
+2. Test the configuration with a dry run. A dry run shows what whimbrel would send to each
+   channel, and it changes nothing.
 
    ```sh
    sudo "$B/whimbrel" dry-run --config "$W/whimbrel.toml"
    ```
 
-   It prints the run's summary line (`WARN disk=WARN alerting=OK`), then the alert.
+   The command prints the run's summary line, `WARN disk=WARN alerting=OK`, followed by the
+   alert.
 
-3. Send it somewhere real. Make a Slack app with an [incoming
-   webhook](https://api.slack.com/messaging/webhooks), and put the webhook URL in a file only root
-   can read:
+3. Send the alert to Slack. Create a Slack app that has an [incoming
+   webhook](https://api.slack.com/messaging/webhooks), and then put the webhook URL in a file that
+   only root can read:
 
    ```sh
    sudo install -m 600 /dev/null "$W/slack-webhook"
    sudo -e "$W/slack-webhook"
    ```
 
-   Then replace the `print` channel, with the file's full path:
+   In the config file, replace the `print` channel with a `slack` channel that gives the file's
+   full path:
 
    ```toml
    [[channel]]
@@ -141,13 +172,21 @@ The examples show Linux's paths; on a Mac, use the Mac column.
    webhook_file = "/etc/whimbrel/slack-webhook"
    ```
 
-   whimbrel refuses a config that holds a webhook URL itself.
+   whimbrel refuses a config file that contains a webhook URL.
 
-4. Run it for real: `sudo "$B/whimbrel" run --config "$W/whimbrel.toml"`. The alert arrives in Slack.
-   Run it again and nothing is sent: nothing changed. Delete the `warn` and `fail` lines, so the
-   defaults apply, and run once more for the all-clear.
+4. Run whimbrel:
 
-5. Schedule it hourly. On Linux, with systemd:
+   ```sh
+   sudo "$B/whimbrel" run --config "$W/whimbrel.toml"
+   ```
+
+   The alert arrives in Slack. If you run the command again, whimbrel sends nothing, because
+   nothing changed. To get the all-clear message, delete the `warn` and `fail` lines so that the
+   defaults apply, and then run the command again.
+
+5. Schedule whimbrel to run hourly.
+
+   On Linux, create a systemd service and a timer:
 
    ```ini
    # /etc/systemd/system/whimbrel.service
@@ -164,12 +203,14 @@ The examples show Linux's paths; on a Mac, use the Mac column.
    WantedBy=timers.target
    ```
 
+   Then enable the timer:
+
    ```sh
    sudo systemctl daemon-reload && sudo systemctl enable --now whimbrel.timer
    ```
 
-   On a Mac, with a LaunchDaemon saved as `/Library/LaunchDaemons/whimbrel.plist`, owned by root
-   and mode 644:
+   On a Mac, save the following LaunchDaemon as `/Library/LaunchDaemons/whimbrel.plist`. The file
+   must belong to root and have mode 644.
 
    ```xml
    <?xml version="1.0" encoding="UTF-8"?>
@@ -191,27 +232,34 @@ The examples show Linux's paths; on a Mac, use the Mac column.
    </plist>
    ```
 
+   Then load the LaunchDaemon:
+
    ```sh
    sudo launchctl bootstrap system /Library/LaunchDaemons/whimbrel.plist
    ```
 
-   With cron instead: `0 * * * * /usr/local/bin/whimbrel run --config /etc/whimbrel/whimbrel.toml`.
+   To use cron instead, add the following line to root's crontab:
 
-From here, add the checks you want. [The config reference](docs/config.md) has every key.
+   ```text
+   0 * * * * /usr/local/bin/whimbrel run --config /etc/whimbrel/whimbrel.toml
+   ```
+
+After you receive your first alert, add the checks that you want. For every key, see the [config
+reference](docs/config.md).
 
 ## Checks
 
-| Kind | Watches |
+| Kind | What it watches |
 |---|---|
-| `disk` | How full a volume is, and the biggest folders when it's full. |
-| `file` | That files belong to one account and are no more open than a mode. |
-| `secrets` | Logs and the journal for token-shaped strings: counts only, never the match. |
-| `journald-drops` | Units journald dropped lines from in the last hour, because they log in a loop. |
+| `disk` | How full a volume is. When the volume is nearly full, the alert names the largest folders. |
+| `file` | Whether files belong to one account and have permissions no broader than a given mode. |
+| `secrets` | Token-shaped strings in logs and in the journal. The alert gives counts only, never the matched text. |
+| `journald-drops` | Units whose log lines journald dropped in the last hour because the units log in a loop. |
 | `command` | Your own program, which prints result rows. |
-| `result-file` | Result rows another job left in a file. |
+| `result-file` | Result rows that another job wrote to a file. |
 
-`command` and `result-file` are how you watch anything else. Write a script that prints one row
-per thing it checked, then `RESULT` and its worst level:
+To watch anything else, use `command` or `result-file`. Write a script that prints one row for
+each thing that it checks, followed by a `RESULT` line that gives the worst level:
 
 ```text
 OK	backup	The backup finished.	
@@ -219,37 +267,47 @@ FAIL	replica	The replica is 3 hours behind.	See `psql -c 'select now() - pg_last
 RESULT	FAIL
 ```
 
-Each line is tab-separated: level, a name, what's wrong, and what to run. whimbrel shows each WARN
-or FAIL row's words as written, if they keep the sentence rule, and counts the ones that don't.
-Run it with `command` when whimbrel can run it, optionally as another account. Have it write a
-file for `result-file` when it has to run somewhere whimbrel can't, such as in a user's GUI session
-on a Mac. [Result rows](docs/config.md#result-rows) has the details.
+Each row has four tab-separated fields: the level, a name, what's wrong, and what to run. whimbrel
+shows the text of each `WARN` or `FAIL` row as written if the row follows the sentence rule, and
+it counts the rows that don't.
+
+- Use `command` when whimbrel can run the script itself, optionally as another account.
+- Use `result-file` when the script must run where whimbrel can't, for example in a user's GUI
+  session on a Mac. The script writes its rows to a file, and whimbrel reads the file.
+
+For details, see [Result rows](docs/config.md#result-rows).
 
 ## Redaction
 
-Every alert, and every reason a send failed, goes through redaction before any channel or the log
-sees it. Built in are a few hundred token shapes, every prefix-anchored rule of three published
-secret-scanning lists, and you can add your own patterns or switch any of them off. [Secret
-patterns](docs/config.md#secret-patterns) lists them.
+whimbrel redacts every alert, and every reason that a send failed, before a channel or the log
+receives it. whimbrel includes a few hundred built-in token patterns: every prefix-anchored rule
+from three published secret-scanning lists. You can add your own patterns or turn off any built-in
+pattern. For the list of patterns, see [Secret patterns](docs/config.md#secret-patterns).
 
 ## Exit status
 
-`run` exits 0 when the run went through, even if a send failed, since the next run retries it; 1
-when it ran but couldn't keep its state; and 2 when it couldn't start, such as with a config it
-refuses. Each run writes one line to the log (stdout unless `log_file` is set):
+The `run` command exits with one of the following statuses:
+
+| Status | Meaning |
+|---|---|
+| 0 | The run completed. This includes a run in which a send failed, because the next run retries the send. |
+| 1 | The run completed, but whimbrel couldn't save its state. |
+| 2 | whimbrel couldn't start, for example because it refused the config file. |
+
+Each run writes one line to the log. The log is stdout unless you set `log_file`.
 
 ```text
 2026-11-24T10:00:00Z WARN disk=WARN alerting=OK; slack: sent
 ```
 
-A send that fails logs `alert failed` with the reason, which is what to grep for if you watch the
-watch.
+When a send fails, the log line contains `alert failed` and the reason. To monitor whimbrel
+itself, search the log for that text.
 
 ## Stability
 
-The contract is the command line, the config file and the result-row format. The crate's Rust
-items are public only so its own tests reach them; they aren't a library API and can change in
-any release. whimbrel isn't published to crates.io.
+The stable interface is the command line, the config file format, and the result-row format. The
+crate's Rust items are public only so that the crate's own tests can use them. They aren't a
+library API, and they can change in any release. whimbrel isn't published to crates.io.
 
 ## License
 

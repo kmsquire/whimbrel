@@ -1,6 +1,6 @@
 # Config reference
 
-whimbrel reads one TOML file, named on the command line:
+whimbrel reads one TOML config file, which you name on the command line:
 
 ```sh
 whimbrel run --config FILE       # check, tell each channel what changed, keep the ledger
@@ -8,15 +8,20 @@ whimbrel dry-run --config FILE   # say what each channel would be sent, and chan
 whimbrel --version
 ```
 
-The file must belong to the account running whimbrel and not be writable by its group or others
-(600 is right). It names programs whimbrel runs, often as root.
+The config file must belong to the account that runs whimbrel, and its group and other accounts
+must not be able to write it. Mode 600 is appropriate. The file names programs that whimbrel
+runs, often as root.
 
-Every table refuses keys it doesn't know, so a typo is an error, not a silently ignored setting.
-An error names the file and what's wrong: the key, and for a TOML or top-level error the line, which
-for a `[[channel]]` table is its first. A check's error names the check by its number and kind
-instead: `check 2 (disk): warn must be under fail`. No error repeats a value, in case the value is
-a secret pasted into the wrong place. Paths must be absolute wherever this page says so, and a
-relative one is refused.
+Every table refuses keys that it doesn't recognize, so a typo is an error and not a setting that
+whimbrel silently ignores. An error message names the file and says what's wrong:
+
+- For a TOML error or a top-level error, the message gives the key and the line. For a
+  `[[channel]]` table, the line is the table's first line.
+- For an error in a check, the message names the check by its number and kind instead, for
+  example `check 2 (disk): warn must be under fail`.
+
+An error message never repeats a value, in case the value is a secret that was pasted into the
+wrong place. Where this page says that a path must be absolute, whimbrel refuses a relative path.
 
 - [Top level](#top-level)
 - [Secret patterns](#secret-patterns)
@@ -29,17 +34,18 @@ relative one is refused.
 
 ## Top level
 
-| Key | Type | Default | |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `host` | string | required | What alerts call this machine: "the web server", "your Mac". It's used mid-sentence and capitalized when it starts one. |
-| `state_dir` | absolute path | required | Where whimbrel keeps what each channel was told, its lock, and each check's own state. Made owner-only (700) if missing; refused if another account owns it or can write it. |
-| `log_file` | absolute path | stdout | Where each run's one line is appended. Made 600 if missing. |
-| `curl` | path | `curl` from `PATH` | The `curl` the `slack` and `bluebubbles` channels send with. |
-| `[secret_patterns]` | table | built-ins on | What a secret looks like here. See [Secret patterns](#secret-patterns). |
-| `[[check]]` | array of tables | none | The checks, in the order they run and alerts list them. |
-| `[[channel]]` | array of tables | none | Where alerts go. With none, `run` checks and logs but tells no one. |
+| `host` | string | required | The name that alerts use for this machine, for example "the web server" or "your Mac". whimbrel uses the name mid-sentence and capitalizes it at the start of a sentence. |
+| `state_dir` | absolute path | required | The directory where whimbrel keeps what it told each channel, its lock, and each check's own state. If the directory is missing, whimbrel creates it with mode 700. whimbrel refuses a directory that another account owns or can write. |
+| `log_file` | absolute path | stdout | The file to which whimbrel appends each run's one log line. If the file is missing, whimbrel creates it with mode 600. |
+| `curl` | path | `curl` from `PATH` | The `curl` program that the `slack` and `bluebubbles` channels use to send. |
+| `[secret_patterns]` | table | built-ins on | What a secret looks like on this host. See [Secret patterns](#secret-patterns). |
+| `[[check]]` | array of tables | none | The checks, in the order in which whimbrel runs them and alerts list them. |
+| `[[channel]]` | array of tables | none | Where alerts go. With no channels, `run` checks and logs but sends no alerts. |
 
-A Slack webhook URL anywhere in the file is refused: put it in a file and name that file.
+whimbrel refuses a config file that contains a Slack webhook URL anywhere. Put the URL in a
+separate file, and name that file in the config file.
 
 ## Secret patterns
 
@@ -50,43 +56,51 @@ disable = ["stripe-access-token"]
 patterns = ['myco_[0-9a-f]{40}']
 ```
 
-| Key | Type | Default | |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `builtins` | bool | `true` | Use the built-in patterns below. `false` turns them all off. |
-| `disable` | array of ids | `[]` | Built-in patterns to leave out, by id. They're published shapes, and on some hosts some will match ordinary ids that happen to share a token's prefix; leave those out here. An id that isn't below is refused, even with `builtins = false`. An id named twice is the same as once, and naming every id is the same as `builtins = false`. |
-| `patterns` | array of regexes | `[]` | More patterns, in [Rust regex syntax](https://docs.rs/regex/latest/regex/#syntax), matched as written, Unicode classes included. An invalid one, or one that can match empty text, is refused without being repeated. |
+| `builtins` | Boolean | `true` | Whether to use the built-in patterns. To turn off all of them, set this key to `false`. |
+| `disable` | array of ids | `[]` | The ids of built-in patterns to leave out. The built-in patterns are published shapes, and on some hosts some of them match ordinary ids that share a token's prefix. List those patterns here. whimbrel refuses an id that isn't in the table of built-in patterns, even when `builtins = false`. Listing an id twice has the same effect as listing it once, and listing every id has the same effect as `builtins = false`. |
+| `patterns` | array of regexes | `[]` | Additional patterns, in [Rust regex syntax](https://docs.rs/regex/latest/regex/#syntax). whimbrel matches them as written, including Unicode classes. whimbrel refuses a pattern that is invalid or that can match empty text, and the error message doesn't repeat the pattern. |
 
-The patterns are used twice:
+whimbrel uses the patterns in two ways:
 
-- **Redaction.** Every match in an alert, a failed send's reason, and the ledger is replaced with
-  `[redacted]` before any channel or file sees it, whichever check wrote the words. This matters
-  most for `command` and `result-file`, whose rows are text from elsewhere.
-- **The [`secrets`](#secrets) check**, which counts lines holding a match.
+- **Redaction.** Before a channel or a file receives any text, whimbrel replaces every match in
+  an alert, in the reason for a failed send, and in the ledger with `[redacted]`, regardless of
+  which check wrote the text. Redaction matters most for `command` and `result-file`, because
+  their rows contain text from outside whimbrel.
+- **The [`secrets`](#secrets) check.** The check counts the lines that contain a match.
 
-With the built-ins off and no `patterns` of your own, nothing is redacted and a `secrets` check is
-refused.
+If you turn off the built-in patterns and set no `patterns` of your own, whimbrel redacts nothing
+and refuses a `secrets` check.
 
 ### Built-in patterns
 
-The built-ins are every rule of three published lists that passes one test, taken in list order:
-gitleaks v8.30.1, betterleaks and Google's osv-scalibr, recorded with their licenses in
-`THIRD-PARTY.md`. A rule passes if
+The built-in patterns are every rule from three published lists that passes one test. whimbrel
+takes the lists in the following order: gitleaks v8.30.1, betterleaks, and Google's osv-scalibr.
+`THIRD-PARTY.md` records the lists and their licenses.
 
-- its token, the rule less the boundary a list matches after the token, compiles in Rust's regex;
-- the token starts the match, so no rule that needs a keyword nearby passes;
-- every way it can match starts with the same 3 or more fixed characters;
-- it can't match fewer than 16 characters, so ordinary words and log lines don't;
-- it's a shape, not one fixed string;
-- and no rule taken from an earlier list already matches an example made from it.
+A rule passes the test if all of the following are true:
 
-Nothing is chosen by service, so some services you use may be missing and some patterns match
-things that aren't secret, such as a service's public URL. Add what's missing with `patterns`, and
-switch off what's noisy with `disable`. One pattern is whimbrel's own, `password-in-url`, for the
-password the `bluebubbles` channel sends in its URL.
+- The rule's token compiles in Rust's regex engine. The token is the rule without the boundary
+  that a list matches after the token.
+- The token starts the match. A rule that requires a keyword near the token doesn't pass.
+- Every string that the token can match starts with the same three or more fixed characters.
+- The token can't match fewer than 16 characters, so it doesn't match ordinary words and log
+  lines.
+- The token is a shape, not one fixed string.
+- No rule from an earlier list already matches an example that is generated from the token.
 
-Each built-in matches as its source publishes it, except that `\w`, `\d` and `(?i)` in them mean
-their ASCII forms: every token is ASCII, and Unicode's tables would make a few hundred patterns
-cost hundreds of megabytes. Your own `patterns` match as written, Unicode included.
+whimbrel doesn't choose patterns by service. As a result, patterns for some services that you use
+might be missing, and some patterns match text that isn't secret, such as a service's public URL.
+To add a missing pattern, use `patterns`. To turn off a noisy pattern, use `disable`.
+
+One pattern is whimbrel's own: `password-in-url`, which matches the password that the
+`bluebubbles` channel sends in its URL.
+
+Each built-in pattern matches as its source publishes it, with one exception: `\w`, `\d`, and
+`(?i)` in built-in patterns have their ASCII meanings. Every token is ASCII, and the Unicode
+tables would make a few hundred patterns use hundreds of megabytes of memory. Your own `patterns`
+match as written, including Unicode.
 
 <!-- The ids and their order must match src/secret_patterns.rs; tests/docs.rs checks. -->
 
@@ -356,22 +370,24 @@ cost hundreds of megabytes. Your own `patterns` match as written, Unicode includ
 
 ## Checks
 
-Every check takes these, besides its own keys:
+Every check takes the following keys in addition to its own:
 
-| Key | Type | Default | |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `kind` | string | required | One of the kinds below. |
-| `key` | string | the kind's name | Stable and unique on this host. Lowercase letters, digits and dashes, since it names the check's own directory under `state_dir`. `alerting` is taken. Changing it makes the check new: its open problem is told as recovered and found again. |
-| `about` | string | per kind | What recovered, as a noun phrase, for the all-clear: "the disk", "the nightly backup". |
+| `kind` | string | required | One of the kinds in this section. |
+| `key` | string | the kind's name | A name for the check that is stable and unique on this host. Use lowercase letters, digits, and dashes, because the key names the check's own directory under `state_dir`. The key `alerting` is reserved. If you change a key, whimbrel treats the check as new: it reports the check's open problem as recovered and then reports the problem again. |
+| `about` | string | per kind | A noun phrase that says what recovered, for the all-clear message. For example, "the disk" or "the nightly backup". |
 
-Two checks of one kind need different keys.
+If you configure two checks of the same kind, give them different keys.
 
-Between runs, whimbrel compares each check's level and what its problems are about, not their
-exact numbers, so the disk going from 85% to 86% full isn't news. Each kind below says what is.
+On this page, *news* means a change that whimbrel reports. Between runs, whimbrel compares each
+check's level and what its problems are about, not the exact numbers. For example, a disk that
+goes from 85% to 86% full isn't news. Each kind's section says what counts as news for that kind.
 
 ### `disk`
 
-How full the volume holding `path` is, by `df -P -k`: the number `df` shows a person.
+The `disk` check reports how full the volume that contains `path` is. It uses `df -P -k`, so the
+percentage is the one that `df` displays.
 
 ```toml
 [[check]]
@@ -380,21 +396,23 @@ path = "/"
 suspects = ["/var/log", "/home", "/tmp"]
 ```
 
-| Key | Type | Default | |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `path` | string | required | Any path on the volume. On a Mac, `/System/Volumes/Data`: `/` is the sealed system volume. |
-| `warn` | integer | `80` | WARN at this percent full. |
-| `fail` | integer | `90` | FAIL at this percent. `warn` must be under `fail`, and `fail` at most 100. |
-| `suspects` | array of paths | `[]` | When it's WARN or FAIL, the three biggest folders one level under these are named, by `du -d 1`. |
-| `df` | path | `df` from `PATH` | |
-| `du` | path | `du` from `PATH` | |
+| `path` | string | required | Any path on the volume. On a Mac, use `/System/Volumes/Data`, because `/` is the sealed system volume. |
+| `warn` | integer | `80` | The percent full at which the check is `WARN`. |
+| `fail` | integer | `90` | The percent full at which the check is `FAIL`. `warn` must be less than `fail`, and `fail` must be at most 100. |
+| `suspects` | array of paths | `[]` | When the check is `WARN` or `FAIL`, the alert names the three largest folders one level under these paths, as measured by `du -d 1`. |
+| `df` | path | `df` from `PATH` | The `df` program to use. |
+| `du` | path | `du` from `PATH` | The `du` program to use. |
 
-Default `about`: "the disk". News: the level changing.
+- **Default `about`:** "the disk"
+- **News:** The level changes.
 
 ### `file`
 
-That each file is a plain file of one account and no more open than a mode. For files that hold
-secrets on their way through, such as a provisioning log.
+The `file` check verifies that each file is a regular file, belongs to one account, and has
+permissions no broader than a given mode. Use it for files that can temporarily contain secrets,
+such as a provisioning log.
 
 ```toml
 [[check]]
@@ -404,20 +422,23 @@ about = "the provisioning log's permissions"
 paths = ["/var/log/cloud-init-output.log"]
 ```
 
-| Key | Type | Default | |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `paths` | array of absolute paths | required | Not followed if they're links: a link is "not a plain file". |
-| `owner_uid` | integer | `0` | The account each must belong to. |
-| `mode` | integer | `0o600` | The most open each may be. Extra bits, execute included, are FAIL. |
+| `paths` | array of absolute paths | required | The files to check. whimbrel doesn't follow links. It reports a link as "not a plain file". |
+| `owner_uid` | integer | `0` | The uid of the account that each file must belong to. |
+| `mode` | integer | `0o600` | The broadest permissions that each file can have. Any additional bit, including an execute bit, is `FAIL`. |
 
-A file that isn't there is WARN, never OK. Default `about`: "the files' permissions". News: which
-files are wrong.
+A missing file is `WARN`, never `OK`.
+
+- **Default `about`:** "the files' permissions"
+- **News:** The set of files that are wrong changes.
 
 ### `secrets`
 
-Lines in logs, and entries in the systemd journal, that match a [secret pattern](#secret-patterns). It's FAIL with a
-count per log and never copies what matched, into an alert or anywhere else. A log it can't read
-is WARN, never clean.
+The `secrets` check finds lines in logs, and entries in the systemd journal, that match a [secret
+pattern](#secret-patterns). When it finds a match, the check is `FAIL` and gives a count for each
+log. It never copies the matched text into an alert or anywhere else. A log that the check can't
+read is `WARN`, never clean.
 
 ```toml
 [[check]]
@@ -428,37 +449,47 @@ log_dirs = ["/srv/app/logs"]
 journal = true
 ```
 
-| Key | Type | Default | |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `logs` | array of absolute paths | `[]` | Logs that must be there: a missing one is WARN, unscanned. |
-| `optional_logs` | array of absolute paths | `[]` | Logs scanned if they're there. The last part may end in `*`, which matches any rest of a name: `/var/log/syslog*` is `syslog`, `syslog.1` and `syslog.2.gz`. |
-| `log_dirs` | array of absolute paths | `[]` | Every `*.log` under each, however deep. Links aren't followed. |
-| `max_mb` | integer | `200` | A log bigger than this is WARN, unscanned: for a `.gz`, what it decompresses to. A log still growing is read as far as it reached when it was opened. |
-| `journal` | bool | `false` | Also read the journal, with `journalctl`. |
-| `journalctl` | path | `journalctl` from `PATH` | |
-| `journal_secs` | integer | `600` | How long `journalctl` gets each run, from 1 to 86400. |
+| `logs` | array of absolute paths | `[]` | Logs that must exist. A missing log is `WARN`, and whimbrel reports it as unscanned. |
+| `optional_logs` | array of absolute paths | `[]` | Logs that whimbrel scans if they exist. The last path component can end in `*`, which matches the rest of a filename. For example, `/var/log/syslog*` matches `syslog`, `syslog.1`, and `syslog.2.gz`. |
+| `log_dirs` | array of absolute paths | `[]` | Directories in which whimbrel scans every `*.log` file, at any depth. whimbrel doesn't follow links. |
+| `max_mb` | integer | `200` | The largest log, in megabytes, that whimbrel scans. A larger log is `WARN`, and whimbrel reports it as unscanned. For a `.gz` file, the limit applies to the decompressed size. whimbrel reads a log that is still growing only up to the size that the log had when whimbrel opened it. |
+| `journal` | Boolean | `false` | Whether to also read the journal, by using `journalctl`. |
+| `journalctl` | path | `journalctl` from `PATH` | The `journalctl` program to use. |
+| `journal_secs` | integer | `600` | The time limit for `journalctl` in each run, in seconds, from 1 to 86400. |
 
-At least one of `logs`, `optional_logs`, `log_dirs` and `journal` must be set.
+You must set at least one of `logs`, `optional_logs`, `log_dirs`, and `journal`.
 
-- Rotated logs count as one: `syslog`, `syslog.1` and `syslog.2.gz` are "syslog". `.gz` files are
-  read compressed.
-- A log is matched a line at a time, up to 1 MiB of a line at once. A longer line is read in
-  1 MiB pieces, each counted as a line of its own, and a token that straddles two pieces isn't
-  found. Nor is a token a program wrapped across two lines.
-- Only regular files are read, never through a link, so a FIFO or a link to `/dev/zero` named
-  `*.log` can't hang the run.
-- The journal is read from where the last run stopped, using a cursor kept in the check's
-  directory, and its hits are a running total. The first run reads the current boot. A total
-  stays after a reboot, so a FAIL doesn't clear by itself: rotate the secret, then fix or remove
-  the log, then delete the check's directory under `state_dir` to clear the journal's count.
+The check reads logs and the journal as follows:
 
-Default `about`: "the secrets scan". News: another log with hits, and the total count rising, so
-an ongoing leak alerts every run it grows.
+- Rotated logs count as one log. For example, `syslog`, `syslog.1`, and `syslog.2.gz` are all
+  "syslog". whimbrel decompresses `.gz` files as it reads them.
+- whimbrel matches a log one line at a time, up to 1 MiB of a line at once. It reads a longer line
+  in 1 MiB pieces and counts each piece as a separate line. It doesn't find a token that spans two
+  pieces, or a token that a program wrapped across two lines.
+- whimbrel reads only regular files, and never reads through a link. As a result, a FIFO or a link
+  to `/dev/zero` that is named `*.log` can't hang the run.
+- whimbrel reads the journal from where the previous run stopped, by using a cursor that it keeps
+  in the check's directory. The journal's hit count is a running total. The first run reads the
+  current boot.
+
+The journal's total persists across a reboot, so a `FAIL` doesn't clear by itself. To clear it, do
+the following:
+
+1. Rotate the secret.
+2. Fix or remove the log.
+3. Delete the check's directory under `state_dir`, which clears the journal's count.
+
+- **Default `about`:** "the secrets scan"
+- **News:** Another log has hits, or the total count rises. An ongoing leak therefore causes an
+  alert on every run in which the count grows.
 
 ### `journald-drops`
 
-Units journald dropped lines from in the last hour. journald drops a unit's lines when it logs
-faster than the rate limit, which usually means something is failing in a loop.
+The `journald-drops` check reports the units whose log lines journald dropped in the last hour.
+journald drops a unit's lines when the unit logs faster than the rate limit, which usually means
+that something is failing in a loop.
 
 ```toml
 [[check]]
@@ -466,23 +497,28 @@ kind = "journald-drops"
 units = '^(nginx|app@.*)\.service$'
 ```
 
-| Key | Type | Default | |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `units` | regex | every unit | Only units whose name matches. Unanchored: add `^` and `$` to match whole names. |
-| `journalctl` | path | `journalctl` from `PATH` | |
-| `timeout_secs` | integer | `120` | How long `journalctl` gets, from 1 to 86400. |
+| `units` | regex | every unit | Report only the units whose names match. The pattern is unanchored. To match whole names, add `^` and `$`. |
+| `journalctl` | path | `journalctl` from `PATH` | The `journalctl` program to use. |
+| `timeout_secs` | integer | `120` | The time limit for `journalctl`, in seconds, from 1 to 86400. |
 
-It reads journald's own "suppressed messages" notices (`MESSAGE_ID=a596d6fe7bfa4994828e72309e95d61e`)
-from the last hour. A journal it can't read is WARN. Any process can log such a notice, so a unit
-whose name isn't plain ASCII letters, digits and `._@+/-` is counted as "a unit with an unusual
-name" rather than named. Default `about`: "the journal's dropped
-lines". News: which units; not the counts, so a loop that goes on is told once and then by the
-daily reminder.
+The check reads journald's own "suppressed messages" notices
+(`MESSAGE_ID=a596d6fe7bfa4994828e72309e95d61e`) from the last hour. A journal that the check can't
+read is `WARN`.
+
+Any process can log such a notice. For that reason, if a unit's name contains anything other than
+ASCII letters, digits, and the characters `._@+/-`, the alert calls it "a unit with an unusual
+name" and doesn't show the name.
+
+- **Default `about`:** "the journal's dropped lines"
+- **News:** The set of units changes. The counts aren't news, so whimbrel reports a continuing
+  loop once and then in the daily reminder.
 
 ### `command`
 
-Runs a program and reads [result rows](#result-rows) from its stdout. This is how to watch
-anything whimbrel has no kind for.
+The `command` check runs a program and reads [result rows](#result-rows) from the program's
+stdout. Use it to watch anything that whimbrel has no kind for.
 
 ```toml
 [[check]]
@@ -495,45 +531,58 @@ user = "backup"
 timeout_secs = 120
 ```
 
-| Key | Type | Default | |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `program` | absolute path | required | A relative path is refused. |
-| `args` | array of strings | `[]` | Passed as they are, with no shell. |
-| `user` | string | whimbrel's own | Run as this account: its uid, its primary group, and a group list of its primary group only, with real, effective and saved ids all switched so root can't be had back, and its home directory as `HOME`. It gets **no supplementary groups**, since looking them up isn't safe at the moment the account is switched: a program that needs a group's access must have that group as the account's primary group. Needs whimbrel to run as root, unless it names the account whimbrel already runs as. |
-| `timeout_secs` | integer | `60` | From 1 to 86400. Killed after this, with its process group, and WARN. |
-| `required_row` | string | none | A row that must always be there. See [Result rows](#result-rows). |
+| `program` | absolute path | required | The program to run. whimbrel refuses a relative path. |
+| `args` | array of strings | `[]` | Arguments for the program. whimbrel passes them unchanged, without a shell. |
+| `user` | string | whimbrel's own account | The account to run the program as. whimbrel switches to the account's uid and primary group, sets the group list to the primary group only, and sets `HOME` to the account's home directory. It switches the real, effective, and saved ids, so the program can't regain root. The program gets **no supplementary groups**, because looking them up isn't safe at the moment that whimbrel switches accounts. If the program needs a group's access, make that group the account's primary group. To use `user`, whimbrel must run as root, unless `user` names the account that whimbrel already runs as. |
+| `timeout_secs` | integer | `60` | The time limit, in seconds, from 1 to 86400. At the limit, whimbrel kills the program and its process group, and the check is `WARN`. |
+| `required_row` | string | none | The name of a row that must always be present. See [Result rows](#result-rows). |
 
-Before it runs, the configured path is walked a part at a time, following each link, and the
-program is refused with a WARN that says why if:
+Before whimbrel runs the program, it walks the configured path one component at a time and
+follows each link. whimbrel refuses the program, with a `WARN` that gives the reason, in any of
+the following cases:
 
-- it isn't a regular file, or no one can execute it;
-- it, any directory on the way to it, or any link on the way doesn't belong to root or to the
-  account whimbrel runs as;
-- its group or others can write it, or can write any directory on the way, unless that directory
-  is sticky like `/tmp`. Anyone who can change the program, or which program a path leads to, can
-  run code as whimbrel.
+- The program isn't a regular file, or no one can execute it.
+- The program, a directory on the path to it, or a link on the path to it doesn't belong to root
+  or to the account that whimbrel runs as.
+- The program's group or other accounts can write the program, or can write a directory on the
+  path to it, unless that directory is sticky, like `/tmp`.
 
-The checks see permission bits, not macOS ACLs: an ACL that lets another account write the program
-or a directory above it isn't caught, so don't put one there.
+Anyone who can change the program, or change which program a path leads to, can run code as
+whimbrel.
 
-The program runs in a process group of its own. When it exits, or at the timeout, the whole group
-is killed, so nothing in its process group outlives it. Something it started that leaves the
-group, with `setsid` or `setpgrp`, isn't killed: if it holds the program's output open for more
-than 2 seconds after the program exits, that's a WARN saying so, and none of the output is read.
+These checks read permission bits, not macOS ACLs. whimbrel doesn't detect an ACL that lets
+another account write the program or a directory above it, so don't set one.
 
-It runs with stdin empty, stderr discarded, the working directory `/`, and only `PATH`
-(`/usr/bin:/bin:/usr/sbin:/sbin`), `HOME`, `USER` and `LOGNAME` set. Its exit status isn't read, so
-a script that exits 1 when something is wrong works as is, but a program killed by a signal is
-WARN even if its output looks whole. Its output is read the way `result-file` reads a file, up to
-64 KiB.
+The program runs in its own process group. When the program exits, or at the timeout, whimbrel
+kills the whole group, so nothing in the group outlives the program. whimbrel doesn't kill a
+process that the program starts and that leaves the group by using `setsid` or `setpgrp`. If such
+a process holds the program's output open for more than 2 seconds after the program exits, the
+check is `WARN` with a message that says so, and whimbrel reads none of the output.
 
-Default `about`: "the command's result". News: as for result rows.
+The program runs with the following environment:
+
+- Stdin is empty, and stderr is discarded.
+- The working directory is `/`.
+- Only `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), `HOME`, `USER`, and `LOGNAME` are set.
+
+whimbrel doesn't read the program's exit status, so a script that exits with status 1 when
+something is wrong works without changes. However, a program that a signal kills is `WARN`, even
+if its output looks complete. whimbrel reads the output the same way that `result-file` reads a
+file, up to 64 KiB.
+
+- **Default `about`:** "the command's result"
+- **News:** The same as for [result rows](#news).
 
 ### `result-file`
 
-Reads [result rows](#result-rows) another job left in a file. For checks whimbrel can't run itself:
-ones that need a user's GUI session on a Mac, a different schedule, or another machine's results
-copied over.
+The `result-file` check reads [result rows](#result-rows) that another job wrote to a file. Use
+it for checks that whimbrel can't run itself, such as the following:
+
+- A check that needs a user's GUI session on a Mac
+- A check that runs on a different schedule
+- Results that are copied from another machine
 
 ```toml
 [[check]]
@@ -546,25 +595,33 @@ max_age_mins = 1500
 stale_see = "systemctl status backup.timer"
 ```
 
-| Key | Type | Default | |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `path` | absolute path | required | |
-| `owner_uid` | integer | `0` | The account that writes it: the only one whose file is believed. |
-| `max_age_mins` | integer | `90` | Older than this, WARN that whatever writes it may have stopped. |
-| `stale_see` | string | `ls -l` of the file | The command an alert gives when the file is missing or stale. |
-| `required_row` | string | none | A row that must always be there. See [Result rows](#result-rows). |
+| `path` | absolute path | required | The file to read. |
+| `owner_uid` | integer | `0` | The uid of the account that writes the file. whimbrel trusts the file only if this account owns it. |
+| `max_age_mins` | integer | `90` | The maximum age of the file, in minutes. For an older file, the check is `WARN` and says that whatever writes the file might have stopped. |
+| `stale_see` | string | `ls -l` of the file | The command that an alert gives when the file is missing or stale. |
+| `required_row` | string | none | The name of a row that must always be present. See [Result rows](#result-rows). |
 
-The file must be a plain file of `owner_uid` with no write bit for its group or others (the mode
-check sees permission bits, not macOS ACLs), at most 64 KiB, not a link, and not dated more than
-five minutes in the future. The writer should write a temporary file beside it and rename it over
-the old one: a run that reads a half-written file warns until the next.
+The file must meet all of the following requirements:
 
-Default `about`: "the result file".
+- It is a regular file that belongs to `owner_uid`, and it isn't a link.
+- Its group and other accounts can't write it. The check reads permission bits, not macOS ACLs.
+- It is at most 64 KiB.
+- Its modification time isn't more than five minutes in the future.
+
+To avoid a partial read, have the writer write a temporary file in the same directory and then
+rename it over the old file. If a run reads a half-written file, the check warns until the next
+run.
+
+- **Default `about`:** "the result file"
+- **News:** The same as for [result rows](#news).
 
 ## Result rows
 
-What `command` prints and `result-file` holds: UTF-8 text, one row per line, each four fields
-separated by tabs, then a last line with `RESULT`, a tab and the worst level.
+Result rows are what a `command` program prints and what a `result-file` file contains. The
+format is UTF-8 text with one row per line. Each row has four fields that are separated by tabs.
+The last line contains `RESULT`, a tab, and the worst level.
 
 ```text
 LEVEL<TAB>NAME<TAB>WHAT<TAB>NEXT
@@ -572,119 +629,162 @@ LEVEL<TAB>NAME<TAB>WHAT<TAB>NEXT
 RESULT<TAB>LEVEL
 ```
 
-| Field | |
+| Field | Description |
 |---|---|
-| `LEVEL` | `OK`, `WARN`, `FAIL`, or `SKIP` for a row not checked this time, which counts as OK. |
-| `NAME` | What the row is about, unique in the output and stable across runs: `backup`, `replica lag`. At most 64 bytes. |
-| `WHAT` | What's wrong, one sentence ending in a period. Empty is fine on an OK row. |
-| `NEXT` | What to run, starting `See ` or `To fix: ` with the command in backticks, ending in a period. Empty is fine on an OK row. |
+| `LEVEL` | `OK`, `WARN`, `FAIL`, or `SKIP`. Use `SKIP` for a row that wasn't checked in this run. `SKIP` counts as `OK`. |
+| `NAME` | What the row is about, for example `backup` or `replica lag`. The name must be unique in the output, stable across runs, and at most 64 bytes. |
+| `WHAT` | What's wrong, as one sentence that ends in a period. This field can be empty on an `OK` row. |
+| `NEXT` | What to run. The text starts with `See ` or `To fix: `, has the command in backticks, and ends in a period. This field can be empty on an `OK` row. |
 
-The whole output is read or none of it is. Each of these is one WARN about the output, saying
-which, and none of its rows are shown:
+whimbrel reads the whole output or none of it. In each of the following cases, the check is one
+`WARN` about the output that says which case applies, and whimbrel shows none of the rows:
 
-- a line that isn't four fields or a `RESULT` line, a level that isn't one of the above, or a name
-  that's empty or longer than 64 bytes;
-- a name used twice;
-- no `RESULT` line, or anything after it (a blank line included);
-- `RESULT` saying a different level than the worst row;
-- with `required_row` set, no row of that name.
+- A line isn't four fields or a `RESULT` line, a level isn't one of the levels in the table, or a
+  name is empty or longer than 64 bytes.
+- Two rows have the same name.
+- The output has no `RESULT` line, or it has anything after the `RESULT` line, including a blank
+  line.
+- The `RESULT` line gives a level that differs from the worst row's level.
+- `required_row` is set, and no row has that name.
 
-Each WARN or FAIL row is a problem in the alert, its WHAT and NEXT shown as written, worst first,
-then in the output's order, at most 10; more are counted in one more problem. The level is the
-worst row's.
+Each `WARN` or `FAIL` row is a problem in the alert, and whimbrel shows the row's `WHAT` and
+`NEXT` as written. whimbrel lists the worst problems first and otherwise keeps the output's
+order. It shows at most 10 problems and counts the rest in one additional problem. The check's
+level is the worst row's level.
 
-**The sentence rule.** A row is shown as written only if its WHAT is one sentence ending in a
-period, its NEXT starts `See ` or `To fix: `, every backtick is closed, it has no dashes used as
-punctuation, question or exclamation marks, control characters, line separators or format
-characters (bidi marks, zero-width and invisible characters, the zero-width joiner among them,
-the soft hyphen, tag characters), and the two together are at most 500 bytes. Because the joiner
-is refused, some scripts and emoji sequences that need it aren't shown as written. Rows that
-don't are not shown: they're counted, and a few named, in one problem that points at the output.
-This is because the words come from whatever the program read, and an alert is something a
-person may paste into a root shell. [Sentences](#sentences) has the rule in full.
+### The sentence rule
 
-**Links.** A row isn't shown as written if `://`, `www.` or `mailto:`, in any case, appears in its
-WHAT or NEXT outside a code span, or anywhere in its name: those are the forms a channel is sure
-to turn into a link. This doesn't catch everything a channel might link. A bare domain such as
-`example.com/login` isn't caught, since refusing every dotted name would refuse file and host
-names in honest rows. And the `bluebubbles` channel has no code spans, so a URL inside backticks
-may still be tappable there.
+whimbrel shows a row as written only if all of the following are true:
 
-**`required_row`.** A row that must always be there, usually the one that says whether the rest
-could be checked at all, such as `ssh` for a script that checks another machine over SSH. Without
-it the output is one WARN and none of its rows are read: a script that renamed the row would
-otherwise break the watch silently. Its problem also sorts first among those of its level, and a
-`SKIP` on it is a WARN, since a scheduled run never means to skip it.
+- Its `WHAT` is one sentence that ends in a period.
+- Its `NEXT` starts with `See ` or `To fix: `.
+- Every backtick is closed.
+- It contains none of the following: dashes used as punctuation, question marks, exclamation
+  marks, control characters, line separators, or format characters. Format characters include
+  bidirectional marks, zero-width and invisible characters (including the zero-width joiner), the
+  soft hyphen, and tag characters.
+- Its `WHAT` and `NEXT` together are at most 500 bytes.
 
-News: the set of rows gone bad, each with its level, so another row going bad, or one going from
-WARN to FAIL, is news. A row's name is part of that, so renaming a bad row is news once.
+Because whimbrel refuses the zero-width joiner, it doesn't show as written some scripts and emoji
+sequences that need the joiner.
+
+whimbrel doesn't show the rows that break the rule. It counts them, and names a few of them, in
+one problem that points to the output.
+
+The rule exists because the text comes from whatever the program read, and a person might paste
+text from an alert into a root shell. For the full rule, see [Sentences](#sentences).
+
+### Links
+
+whimbrel doesn't show a row as written if `://`, `www.`, or `mailto:`, in any letter case, appears
+in its `WHAT` or `NEXT` outside a code span, or anywhere in its name. Those are the forms that a
+channel is certain to turn into a link.
+
+This rule doesn't catch everything that a channel might turn into a link:
+
+- A bare domain such as `example.com/login` isn't caught, because refusing every dotted name
+  would refuse the file names and host names in legitimate rows.
+- The `bluebubbles` channel has no code spans, so a URL inside backticks might still be tappable
+  there.
+
+### The required row
+
+`required_row` names a row that must always be present. It's usually the row that says whether
+the rest could be checked at all, such as `ssh` for a script that checks another machine over SSH.
+
+If the row is missing, the check is one `WARN`, and whimbrel reads none of the rows. Without this
+rule, a script that renamed the row would silently break the watch.
+
+The required row's problem sorts first among the problems of its level. A `SKIP` on the required
+row is a `WARN`, because a scheduled run never intends to skip it.
+
+### News
+
+For result rows, news is a change in the set of bad rows, each with its level. For example,
+another row going bad is news, and so is a row going from `WARN` to `FAIL`. A row's name is part
+of the set, so renaming a bad row is news once.
 
 ## Channels
 
-Every channel takes:
+Every channel takes the following keys:
 
-| Key | Type | Default | |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `kind` | string | required | `slack`, `bluebubbles` or `print`. |
-| `name` | string | the kind | Unique among this host's channels. What each channel was told is kept under its name, so renaming one makes it new: it's told everything open. |
+| `kind` | string | required | `slack`, `bluebubbles`, or `print`. |
+| `name` | string | the kind | A name that is unique among this host's channels. whimbrel keeps what it told each channel under the channel's name. If you rename a channel, whimbrel treats it as new and tells it about every open problem. |
 
-A secret file must be an absolute path, a regular file of the account running whimbrel, readable
-by it alone (600), not a link, with the secret on its first line. It's read at each send, so a
-rotated secret needs nothing restarted. Keep it in a directory only root can change. A failure to
-send never names the file's path or contents.
+Some keys name a *secret file*. A secret file must meet all of the following requirements:
 
-Both real channels send with `curl`, handing it the URL and the message on stdin, so neither shows
-in a process listing, with a 20-second limit.
+- Its path is absolute.
+- It is a regular file that belongs to the account that runs whimbrel, and it isn't a link.
+- Only that account can read it (mode 600).
+- The secret is on its first line.
+
+whimbrel reads the file at each send, so you don't need to restart anything after you rotate a
+secret. Keep the file in a directory that only root can change. When a send fails, the reason
+never includes the file's path or contents.
+
+The `slack` and `bluebubbles` channels send with `curl`. They pass the URL and the message to
+`curl` on stdin, so neither appears in a process listing. Each send has a 20-second limit.
 
 ### `slack`
 
-Slack, by [incoming webhook](https://api.slack.com/messaging/webhooks). Gets the full form: every
-problem, then each check's details, such as the biggest folders on a full disk.
+The `slack` channel sends to Slack through an [incoming
+webhook](https://api.slack.com/messaging/webhooks). It gets the full form of an alert: every
+problem, followed by each check's details, such as the largest folders on a full disk.
 
-| Key | Type | |
+| Key | Type | Description |
 |---|---|---|
-| `webhook_file` | secret file | Holds `https://hooks.slack.com/services/...`, and nothing else. |
+| `webhook_file` | secret file | A file that contains a `https://hooks.slack.com/services/...` URL and nothing else. |
 
-`<`, `>` and `&` in an alert are escaped, so a name from the host can't become a mention.
+whimbrel escapes `<`, `>`, and `&` in an alert, so a name from the host can't become a mention.
 
 ### `bluebubbles`
 
-iMessage to one person, through a [BlueBubbles](https://bluebubbles.app) server's API. Gets the
-short form: the problems without details.
+The `bluebubbles` channel sends an iMessage to one person through the API of a
+[BlueBubbles](https://bluebubbles.app) server. It gets the short form of an alert: the problems
+without details.
 
-| Key | Type | |
+| Key | Type | Description |
 |---|---|---|
-| `server` | string | `http://` or `https://`, a host and an optional port: `http://127.0.0.1:1234`. No path or credentials. |
-| `password_file` | secret file | The server's password: letters and digits only, since it goes in the query string. |
-| `recipient_file` | secret file | A phone number in international form (`+15555550100`) or an Apple ID email. Never a chat GUID, so an alert can't land in a group chat. |
+| `server` | string | The server's URL: `http://` or `https://`, a host, and an optional port. For example, `http://127.0.0.1:1234`. The URL can't include a path or credentials. |
+| `password_file` | secret file | The server's password. The password can contain only letters and digits, because whimbrel sends it in the query string. |
+| `recipient_file` | secret file | A phone number in international form, such as `+15555550100`, or an Apple ID email address. whimbrel doesn't accept a chat GUID, so an alert can't go to a group chat. |
 
-The request never goes through a proxy, whatever the environment says, since the password is in
-its URL.
+The request never goes through a proxy, regardless of the environment's proxy settings, because
+the password is in the URL.
 
 ### `print`
 
-Writes each alert to stdout. For trying a config out. A dry run puts one in place of every real
-channel, under its name and form.
+The `print` channel writes each alert to stdout. Use it to try out a config file. In a dry run,
+whimbrel replaces every real channel with a `print` channel that has the same name and form.
 
 ## The alerting check
 
-With any channel configured, whimbrel adds a check under the key `alerting` that's WARN when a
-channel can't send, such as when its secret file is missing or unreadable, so the other channels
-carry the news. It's checked without sending.
+When you configure any channel, whimbrel adds a check with the key `alerting`. The check is `WARN`
+when a channel can't send, for example when the channel's secret file is missing or unreadable.
+The other channels then report the problem. whimbrel performs this check without sending
+anything.
 
 ## Sentences
 
-Every WARN or FAIL whimbrel sends follows one rule, and rows from `command` and `result-file` are
-held to it:
+Every `WARN` or `FAIL` that whimbrel sends follows one rule, and whimbrel holds rows from
+`command` and `result-file` to the same rule. Each problem is two sentences, in the following
+order:
 
-1. One plain sentence saying what's wrong.
-2. One sentence starting `See ` or `To fix: ` with the command in backticks, so copying the
-   command can't take the period with it.
-3. No dashes as punctuation, no question or exclamation marks.
-4. It never calls itself a check.
+1. One plain sentence that says what's wrong.
+2. One sentence that starts with `See ` or `To fix: ` and has the command in backticks, so that
+   copying the command can't include the period.
 
-A sentence ends at a period followed by a space and a capital letter or a backtick; periods inside
-backticks don't count. Names that come from the host (files, folders, units) are shown as they
-are only if they're plain ASCII letters, digits and `._@+/-` and don't start with `-`, and are
-otherwise described ("a log with an unusual name"), so a file named to look like a command can't
-put one in an alert.
+In addition, both sentences follow these rules:
+
+- They don't use dashes as punctuation, question marks, or exclamation marks.
+- They never call themselves a check.
+
+A sentence ends at a period that is followed by a space and then a capital letter or a backtick.
+Periods inside backticks don't count.
+
+whimbrel shows a name that comes from the host, such as a file, folder, or unit name, only if the
+name consists of ASCII letters, digits, and the characters `._@+/-`, and doesn't start with `-`.
+Otherwise, whimbrel describes the name, for example "a log with an unusual name". As a result, a
+file whose name looks like a command can't put that command in an alert.
