@@ -1884,6 +1884,8 @@ pub struct SecretPatterns {
 pub struct Group {
     set: regex::bytes::RegexSet,
     each: Vec<regex::bytes::Regex>,
+    /// Per pattern, what a match by it is called.
+    names: Vec<Matched>,
     /// Whether Unicode classes were on when it was compiled.
     pub unicode: bool,
 }
@@ -1892,8 +1894,8 @@ pub struct Group {
 const SIZE_LIMIT: usize = 64 * 1024 * 1024;
 
 impl Group {
-    /// `patterns` compiled with Unicode classes on or off.
-    fn compile(patterns: &[&str], unicode: bool) -> Result<Group, String> {
+    /// `patterns` compiled with Unicode classes on or off, each called by its `names`.
+    fn compile(patterns: &[&str], names: Vec<Matched>, unicode: bool) -> Result<Group, String> {
         let too_big = |_| "secret_patterns are too big to use together".to_string();
         let each = patterns
             .iter()
@@ -1910,7 +1912,12 @@ impl Group {
             .size_limit(SIZE_LIMIT)
             .build()
             .map_err(too_big)?;
-        Ok(Group { set, each, unicode })
+        Ok(Group {
+            set,
+            each,
+            names,
+            unicode,
+        })
     }
 
     /// Each match in `bytes`, as byte offsets, of any pattern.
@@ -1924,6 +1931,20 @@ impl Group {
     fn found_in(&self, bytes: &[u8]) -> bool {
         self.set.is_match(bytes)
     }
+
+    /// What each pattern that matches `bytes` is called.
+    fn which(&self, bytes: &[u8], out: &mut Vec<Matched>) {
+        out.extend(self.set.matches(bytes).iter().map(|i| self.names[i]));
+    }
+}
+
+/// What a match is called, for saying which pattern found it, never what it found: a built-in's
+/// id, which is a public name, or the place in the config's own `patterns` of one of those,
+/// counting from 1, since a config's pattern may describe a secret's shape and is never repeated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Matched {
+    Builtin(&'static str),
+    Own(usize),
 }
 
 impl SecretPatterns {
@@ -1964,15 +1985,18 @@ impl SecretPatterns {
             (false, _) => None,
             (true, true) => Self::builtins().builtins,
             (true, false) => {
-                let kept: Vec<&str> = BUILTINS
+                let kept: Vec<&Shape> = BUILTINS
                     .iter()
                     .filter(|s| !disable.iter().any(|d| d == s.id))
-                    .map(|s| s.pattern)
                     .collect();
                 if kept.is_empty() {
                     None
                 } else {
-                    Some(std::sync::Arc::new(Group::compile(&kept, false)?))
+                    let patterns: Vec<&str> = kept.iter().map(|s| s.pattern).collect();
+                    let names = kept.iter().map(|s| Matched::Builtin(s.id)).collect();
+                    Some(std::sync::Arc::new(Group::compile(
+                        &patterns, names, false,
+                    )?))
                 }
             }
         };
@@ -1980,7 +2004,8 @@ impl SecretPatterns {
             None
         } else {
             let own: Vec<&str> = patterns.iter().map(String::as_str).collect();
-            Some(std::sync::Arc::new(Group::compile(&own, true)?))
+            let names = (1..=own.len()).map(Matched::Own).collect();
+            Some(std::sync::Arc::new(Group::compile(&own, names, true)?))
         };
         Ok(SecretPatterns { builtins, own })
     }
@@ -1989,7 +2014,8 @@ impl SecretPatterns {
     pub fn builtins() -> Self {
         static BUILT: std::sync::LazyLock<std::sync::Arc<Group>> = std::sync::LazyLock::new(|| {
             let all: Vec<&str> = BUILTINS.iter().map(|s| s.pattern).collect();
-            std::sync::Arc::new(Group::compile(&all, false).expect("the built-ins compile"))
+            let names = BUILTINS.iter().map(|s| Matched::Builtin(s.id)).collect();
+            std::sync::Arc::new(Group::compile(&all, names, false).expect("the built-ins compile"))
         });
         SecretPatterns {
             builtins: Some(std::sync::Arc::clone(&BUILT)),
@@ -2059,6 +2085,18 @@ impl SecretPatterns {
     /// Whether `bytes` hold a match.
     pub fn found_in(&self, bytes: &[u8]) -> bool {
         self.groups().any(|g| g.found_in(bytes))
+    }
+
+    /// What each pattern that matches `bytes` is called, each once, in order. Slower than
+    /// [`SecretPatterns::found_in`], so ask it only of what that has already found a match in.
+    pub fn which(&self, bytes: &[u8]) -> Vec<Matched> {
+        let mut out = Vec::new();
+        for g in self.groups() {
+            g.which(bytes, &mut out);
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 }
 
@@ -2368,6 +2406,46 @@ mod tests {
                 took < std::time::Duration::from_secs(30),
                 "{unit}: {took:?}"
             );
+        }
+    }
+
+    #[test]
+    fn which_names_every_pattern_that_matches_by_id_or_by_its_place() {
+        let p = SecretPatterns::new(
+            true,
+            &[],
+            &["myco_[0-9a-f]{8}".into(), "zz_[0-9]{8}".into()],
+        )
+        .unwrap();
+        let gh = format!("ghp_{}", "a1".repeat(18));
+        let aws = format!("AKIA{}", "Q".repeat(16));
+        let line = format!("{gh} and {aws} and myco_0123abcd and {gh} again");
+        assert_eq!(
+            p.which(line.as_bytes()),
+            [
+                Matched::Builtin("aws-access-token"),
+                Matched::Builtin("github-pat"),
+                Matched::Own(1),
+            ]
+        );
+        assert!(p.which(b"an ordinary line").is_empty());
+        // A disabled built-in is never named.
+        let less = SecretPatterns::new(true, &["github-pat".into()], &[]).unwrap();
+        assert!(
+            !less
+                .which(line.as_bytes())
+                .contains(&Matched::Builtin("github-pat"))
+        );
+    }
+
+    #[test]
+    fn no_id_is_itself_taken_for_a_secret() {
+        let p = SecretPatterns::builtins();
+        for s in BUILTINS {
+            for text in [s.id.to_string(), format!("(`{}`)", s.id)] {
+                assert!(!p.found_in(text.as_bytes()), "{text}");
+                assert_eq!(p.redact(&text), text);
+            }
         }
     }
 

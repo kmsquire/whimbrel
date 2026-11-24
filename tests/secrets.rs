@@ -118,11 +118,16 @@ impl Machine {
 }
 
 /// What the scan says when it found something.
-fn found(counts: &str) -> String {
+fn found(places: &str) -> String {
     format!(
-        "Something on the test host logged a secret ({counts}), so rotate it and find what \
-         logged it."
+        "Something on the test host logged a secret, so rotate it and find what logged it: \
+         {places}."
     )
+}
+
+/// One place's part of the sentence, for the test token, which is Slack-bot-shaped.
+fn slack(place: &str) -> String {
+    format!("{place} matched `slack-bot-token`")
 }
 
 fn unscanned(names: &str) -> String {
@@ -162,9 +167,11 @@ fn a_token_in_a_log_is_fail_counted_and_never_copied() {
     assert_eq!(
         f,
         Finding::fail()
-            .says(found("1 in setup.log"))
+            .says(found(&[slack("1 in setup.log")].join("; ")))
             .see_dry_run()
-            .details(COUNTS_ONLY)
+            .details(format!(
+                "setup.log: 1 line, 1 `slack-bot-token`.\n{COUNTS_ONLY}"
+            ))
             .fingerprint(setup.display().to_string())
             .count(1)
     );
@@ -181,7 +188,10 @@ fn a_token_in_a_logs_name_never_goes_out() {
     )
     .unwrap();
     let f = m.run();
-    assert_eq!(f.first_what(), found("1 in a log with an unusual name"));
+    assert_eq!(
+        f.first_what(),
+        found(&[slack("1 in a log with an unusual name")].join("; "))
+    );
     assert!(!m.everything(&f).contains(&token));
 }
 
@@ -192,7 +202,7 @@ fn a_log_name_that_would_add_a_sentence_or_a_command_is_described_not_named() {
     fs::write(m.path("app").join(name), format!("{}\n", common::token())).unwrap();
     assert_eq!(
         m.run().first_what(),
-        found("1 in a log with an unusual name")
+        found(&[slack("1 in a log with an unusual name")].join("; "))
     );
 }
 
@@ -206,7 +216,13 @@ fn logs_with_unusual_names_are_counted_together() {
     m.log("setup.log", &format!("{token}\n"));
     assert_eq!(
         m.run().first_what(),
-        found("1 in setup.log and 4 in 2 logs with unusual names")
+        found(
+            &[
+                slack("1 in setup.log"),
+                slack("4 in 2 logs with unusual names")
+            ]
+            .join("; ")
+        )
     );
 }
 
@@ -234,7 +250,7 @@ fn a_rotated_log_named_journal_never_merges_into_the_journal() {
     m.journal(&format!("{token}\n"));
     assert_eq!(
         m.run().first_what(),
-        found("1 in journal.1.log and 1 in the journal")
+        found(&[slack("1 in journal.1.log"), slack("1 in the journal")].join("; "))
     );
 }
 
@@ -246,7 +262,7 @@ fn the_journal_is_read_from_its_cursor_and_its_hits_kept_as_a_running_total() {
     let first = m.run();
     assert_eq!(
         first.first_what(),
-        found("2 in the journal"),
+        found(&[slack("2 in the journal")].join("; ")),
         "every field counts"
     );
     assert_eq!(first.fingerprint.as_deref(), Some("journal"));
@@ -269,7 +285,10 @@ fn another_hit_where_one_was_already_found_is_news_through_its_count() {
     let first = m.run();
     m.journal(&format!("{token}\n"));
     let more = m.run();
-    assert_eq!(more.first_what(), found("2 in the journal"));
+    assert_eq!(
+        more.first_what(),
+        found(&[slack("2 in the journal")].join("; "))
+    );
     // The same logs: news only because the count rose, which the ledger compares.
     assert_eq!(more.fingerprint, first.fingerprint);
     assert_eq!((first.count, more.count), (Some(1), Some(2)));
@@ -281,13 +300,17 @@ fn a_refused_cursor_is_reset_and_said_while_the_fail_stands_and_the_rescan_doesn
     let token = common::token();
     m.journal(&format!("{token}\n{token}\n"));
     let first = m.run();
-    fs::write(m.record(), r#"{"cursor": "garbage", "total": 2}"#).unwrap();
+    fs::write(
+        m.record(),
+        r#"{"cursor": "garbage", "total": 2, "by": {"slack-bot-token": 2}}"#,
+    )
+    .unwrap();
     let reset = m.run();
     assert_eq!(reset.level, Level::Fail, "{reset:?}");
     assert_eq!(
         reset.first_what(),
-        "Something on the test host logged a secret (2 in the journal), so rotate it and find \
-         what logged it; the watch also couldn't scan journal \
+        "Something on the test host logged a secret, so rotate it and find what logged it: \
+         2 in the journal matched `slack-bot-token`; the watch also couldn't scan journal \
          (cursor refused, so it's read again from this boot)."
     );
     // News: a FAIL that now says something more.
@@ -303,7 +326,10 @@ fn a_leak_in_an_earlier_boot_survives_a_reboot_and_a_reset() {
     let m = Machine::new();
     m.journal(&format!("{}\n", common::token()));
     let first = m.run();
-    assert_eq!(first.first_what(), found("1 in the journal"));
+    assert_eq!(
+        first.first_what(),
+        found(&[slack("1 in the journal")].join("; "))
+    );
     // A reboot, then one exit journalctl gives as a refusal: the record is reset.
     m.journal("--boot--\nordinary\n");
     fs::write(m.path("journal.fail-once"), "").unwrap();
@@ -337,7 +363,11 @@ fn a_dry_run_with_a_refused_cursor_says_so_and_changes_nothing() {
     let m = Machine::new();
     m.journal(&format!("{}\n", common::token()));
     m.run();
-    fs::write(m.record(), r#"{"cursor": "garbage", "total": 1}"#).unwrap();
+    fs::write(
+        m.record(),
+        r#"{"cursor": "garbage", "total": 1, "by": {"slack-bot-token": 1}}"#,
+    )
+    .unwrap();
     let before = files(&m.state().join("secrets"));
     let f = m.run_as(Mode::DryRun);
     assert!(
@@ -357,7 +387,7 @@ fn a_dry_run_counts_the_journal_but_moves_no_cursor_and_keeps_no_total() {
     m.journal(&format!("{token}\n"));
     assert_eq!(
         m.run_as(Mode::DryRun).first_what(),
-        found("1 in the journal")
+        found(&[slack("1 in the journal")].join("; "))
     );
     assert!(!m.state().exists());
     // After a run, it reads from the cursor and adds to the total, and leaves both as they were.
@@ -366,10 +396,13 @@ fn a_dry_run_counts_the_journal_but_moves_no_cursor_and_keeps_no_total() {
     m.journal(&format!("{token}\n"));
     assert_eq!(
         m.run_as(Mode::DryRun).first_what(),
-        found("2 in the journal")
+        found(&[slack("2 in the journal")].join("; "))
     );
     assert_eq!(files(&m.state().join("secrets")), before);
-    assert_eq!(m.run().first_what(), found("2 in the journal"));
+    assert_eq!(
+        m.run().first_what(),
+        found(&[slack("2 in the journal")].join("; "))
+    );
 }
 
 #[test]
@@ -396,8 +429,8 @@ fn with_nowhere_to_keep_the_cursor_a_hit_in_the_journal_is_still_fail_and_counte
     assert_eq!(f.level, Level::Fail, "{f:?}");
     assert_eq!(
         f.first_what(),
-        "Something on the test host logged a secret (1 in the journal), so rotate it and find \
-         what logged it; the watch also couldn't scan journal \
+        "Something on the test host logged a secret, so rotate it and find what logged it: \
+         1 in the journal matched `slack-bot-token`; the watch also couldn't scan journal \
          (no place to keep its cursor)."
     );
     assert_eq!(f.count, Some(1));
@@ -472,7 +505,10 @@ fn a_log_under_a_log_dir_is_scanned_however_deep() {
     let token = common::token();
     fs::write(m.path("app/jobs/a/job-run.log"), format!("{token}\n")).unwrap();
     fs::write(m.path("app/jobs/a/notes.txt"), format!("{token}\n")).unwrap();
-    assert_eq!(m.run().first_what(), found("1 in job-run.log"));
+    assert_eq!(
+        m.run().first_what(),
+        found(&[slack("1 in job-run.log")].join("; "))
+    );
 }
 
 #[test]
@@ -630,8 +666,19 @@ fn a_config_pattern_is_found_like_a_builtin() {
     };
     let f = check.find(&run);
     assert_eq!(f.level, Level::Fail);
-    assert_eq!(f.first_what(), found("1 in setup.log"));
+    assert_eq!(
+        f.first_what(),
+        found("1 in setup.log matched one of your own patterns")
+    );
     assert!(!m.everything(&f).contains("myco_0123abcd"));
+    // Described, never quoted: the pattern itself may say what a secret looks like.
+    assert!(!m.everything(&f).contains("myco_["), "{}", m.everything(&f));
+    assert!(
+        f.details
+            .as_deref()
+            .unwrap()
+            .contains("1 by your own pattern 1")
+    );
 }
 
 #[test]
@@ -645,5 +692,114 @@ fn a_journal_timeout_of_zero_or_past_a_day_is_refused() {
             Some("journal_secs must be from 1 to 86400"),
             "{secs}"
         );
+    }
+}
+
+#[test]
+fn a_journal_record_without_names_says_only_how_many() {
+    let m = Machine::new();
+    let token = common::token();
+    m.journal(&format!("{token}\n"));
+    m.run();
+    // A record as one kept before it kept names: a count and nothing about what matched.
+    fs::write(m.record(), r#"{"cursor": "c1", "total": 3}"#).unwrap();
+    assert_eq!(m.run().first_what(), found("3 in the journal"));
+}
+
+#[test]
+fn two_patterns_on_one_line_are_both_named_and_the_line_counts_once() {
+    let m = Machine::new();
+    let slack_token = common::token();
+    let github = format!("ghp_{}", "a1".repeat(18));
+    m.log("setup.log", &format!("{slack_token} {github}\n{github}\n"));
+    let f = m.run();
+    assert_eq!(
+        f.first_what(),
+        found("2 in setup.log matched `github-pat` and `slack-bot-token`")
+    );
+    assert_eq!(f.count, Some(2));
+    assert!(
+        f.details
+            .as_deref()
+            .unwrap()
+            .starts_with("setup.log: 2 lines, 2 `github-pat`, 1 `slack-bot-token`."),
+        "{:?}",
+        f.details
+    );
+}
+
+#[test]
+fn at_most_three_patterns_are_named_for_one_log_and_the_rest_counted() {
+    let m = Machine::new();
+    let line = [
+        common::token(),
+        format!("ghp_{}", "a1".repeat(18)),
+        format!("AKIA{}", "Q".repeat(16)),
+        format!("glpat-{}", "a".repeat(20)),
+        format!("npm_{}", "a1".repeat(18)),
+    ]
+    .join(" ");
+    m.log("setup.log", &format!("{line}\n"));
+    let f = m.run();
+    let said = f.first_what();
+    assert_eq!(said.matches('`').count(), 6, "{said}");
+    assert!(said.ends_with(" and 2 more."), "{said}");
+    // The details name every one.
+    let details = f.details.as_deref().unwrap();
+    for id in [
+        "slack-bot-token",
+        "github-pat",
+        "aws-access-token",
+        "gitlab-pat",
+        "npm-access-token",
+    ] {
+        assert!(details.contains(&format!("`{id}`")), "{id}: {details}");
+    }
+}
+
+#[test]
+fn the_journals_pattern_names_survive_a_second_run() {
+    let m = Machine::new();
+    let github = format!("ghp_{}", "a1".repeat(18));
+    m.journal(&format!("{github}\n"));
+    assert_eq!(
+        m.run().first_what(),
+        found("1 in the journal matched `github-pat`")
+    );
+    // Nothing new in the journal: the record alone carries the name.
+    assert_eq!(
+        m.run().first_what(),
+        found("1 in the journal matched `github-pat`")
+    );
+    // Another kind joins it, and both are named, with the total risen.
+    m.journal(&format!("{}\n", common::token()));
+    let f = m.run();
+    assert_eq!(
+        f.first_what(),
+        found("2 in the journal matched `github-pat` and `slack-bot-token`")
+    );
+    assert_eq!(f.count, Some(2));
+    let record = fs::read_to_string(m.record()).unwrap();
+    assert!(
+        record.contains("\"github-pat\":1") && record.contains("\"slack-bot-token\":1"),
+        "{record}"
+    );
+}
+
+#[test]
+fn no_matched_text_reaches_the_sentence_the_details_the_fingerprint_or_the_state() {
+    let m = Machine::new();
+    let github = format!("ghp_{}", "a1".repeat(18));
+    let slack_token = common::token();
+    m.log("setup.log", &format!("{github}\n"));
+    m.journal(&format!("{slack_token}\n"));
+    let f = m.run();
+    assert_eq!(f.level, Level::Fail);
+    let all = m.everything(&f);
+    assert!(f.details.is_some() && f.fingerprint.is_some());
+    for token in [&github, &slack_token] {
+        assert!(!all.contains(token.as_str()), "{all}");
+        // Nor any long piece of one.
+        assert!(!all.contains(&token[..12]), "{all}");
     }
 }

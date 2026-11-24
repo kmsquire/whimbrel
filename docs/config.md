@@ -59,7 +59,7 @@ patterns = ['myco_[0-9a-f]{40}']
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `builtins` | Boolean | `true` | Whether to use the built-in patterns. To turn off all of them, set this key to `false`. |
-| `disable` | array of ids | `[]` | The ids of built-in patterns to leave out. The built-in patterns are published shapes, and on some hosts some of them match ordinary ids that share a token's prefix. List those patterns here. whimbrel refuses an id that isn't in the table of built-in patterns, even when `builtins = false`. Listing an id twice has the same effect as listing it once, and listing every id has the same effect as `builtins = false`. |
+| `disable` | array of ids | `[]` | The ids of built-in patterns to leave out. The built-in patterns are published shapes, and on some hosts some of them match ordinary ids that share a token's prefix. When the `secrets` check reports a match that isn't a secret, its alert names the pattern's id; list that id here. whimbrel refuses an id that isn't in the table of built-in patterns, even when `builtins = false`. Listing an id twice has the same effect as listing it once, and listing every id has the same effect as `builtins = false`. |
 | `patterns` | array of regexes | `[]` | Additional patterns, in [Rust regex syntax](https://docs.rs/regex/latest/regex/#syntax). whimbrel matches them as written, including Unicode classes. whimbrel refuses a pattern that is invalid or that can match empty text, and the error message doesn't repeat the pattern. |
 
 whimbrel uses the patterns in two ways:
@@ -436,9 +436,26 @@ A missing file is `WARN`, never `OK`.
 ### `secrets`
 
 The `secrets` check finds lines in logs, and entries in the systemd journal, that match a [secret
-pattern](#secret-patterns). When it finds a match, the check is `FAIL` and gives a count for each
-log. It never copies the matched text into an alert or anywhere else. A log that the check can't
-read is `WARN`, never clean.
+pattern](#secret-patterns). When it finds a match, the check is `FAIL`, and for each log it gives
+the number of lines with a match and the patterns that matched. It never copies the matched text
+into an alert or anywhere else. A log that the check can't read is `WARN`, never clean.
+
+An alert looks like this:
+
+```text
+Something on the web server logged a secret, so rotate it and find what logged it: 5 in syslog
+matched `github-pat` and `slack-bot-token`; 2 in the journal matched one of your own patterns.
+```
+
+The alert names patterns as follows:
+
+- A built-in pattern by its id, in code font. The id tells you which kind of key to rotate. If
+  the match isn't a secret, list the id in [`disable`](#secret-patterns).
+- One of your own `patterns` as "one of your own patterns", never by the pattern itself, since a
+  pattern can describe what a secret looks like.
+- At most three patterns for each log, with the number of others. The full form of the alert,
+  which Slack gets, lists every pattern with its count for each log.
+- A line that two patterns match counts once in the log's total, and once for each pattern.
 
 ```toml
 [[check]]
@@ -471,8 +488,9 @@ The check reads logs and the journal as follows:
 - whimbrel reads only regular files, and never reads through a link. As a result, a FIFO or a link
   to `/dev/zero` that is named `*.log` can't hang the run.
 - whimbrel reads the journal from where the previous run stopped, by using a cursor that it keeps
-  in the check's directory. The journal's hit count is a running total. The first run reads the
-  current boot.
+  in the check's directory. The journal's hit count is a running total, kept with the id of each
+  pattern that matched and its count, and never the matched text. The first run reads the current
+  boot.
 
 The journal's total persists across a reboot, so a `FAIL` doesn't clear by itself. To clear it, do
 the following:
@@ -483,7 +501,8 @@ the following:
 
 - **Default `about`:** "the secrets scan"
 - **News:** Another log has hits, or the total count rises. An ongoing leak therefore causes an
-  alert on every run in which the count grows.
+  alert on every run in which the count grows. A different pattern matching in a log that already
+  has hits isn't news by itself; it's news when it raises the count.
 
 ### `journald-drops`
 

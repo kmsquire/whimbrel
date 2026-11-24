@@ -23,10 +23,97 @@ use serde::{Deserialize, Serialize};
 use crate::check::{At, Check, CheckDir, Finding, Kind, Shared, sentence_case};
 use crate::config::from_table;
 use crate::process::{self, Unfinished};
-use crate::secret_patterns::SecretPatterns;
+use crate::secret_patterns::{Matched, SecretPatterns};
 use crate::sentence::{and_list, shown};
 
 const COUNTS_ONLY: &str = "Counts only: the watch never copies what it finds.";
+
+/// The most patterns one log's part of the sentence names; the rest are counted.
+pub const MAX_NAMED: usize = 3;
+
+/// Lines with a hit, and how many of them each pattern matched. A line two patterns match is one
+/// line, and one for each pattern. Kept by name: a built-in's id, or `own N` for the config's Nth
+/// pattern, so it can go in the journal's record. Names only, never what matched.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Tally {
+    lines: u64,
+    by: BTreeMap<String, u64>,
+}
+
+impl Tally {
+    /// Count one line with a hit, matched by `which`.
+    fn line(&mut self, which: &[Matched]) {
+        self.lines = self.lines.saturating_add(1);
+        for m in which {
+            let n = self.by.entry(name_of(*m)).or_default();
+            *n = n.saturating_add(1);
+        }
+    }
+
+    fn add(&mut self, other: &Tally) {
+        self.lines = self.lines.saturating_add(other.lines);
+        for (k, v) in &other.by {
+            let n = self.by.entry(k.clone()).or_default();
+            *n = n.saturating_add(*v);
+        }
+    }
+
+    /// For a journal read again from the start of a boot: each count the larger of the two.
+    fn most(&mut self, other: &Tally) {
+        self.lines = self.lines.max(other.lines);
+        for (k, v) in &other.by {
+            let n = self.by.entry(k.clone()).or_default();
+            *n = (*n).max(*v);
+        }
+    }
+
+    /// The patterns, most lines first, then by name: a built-in's id in code font, and the
+    /// config's own together, never quoted. At most [`MAX_NAMED`], and how many more there are.
+    fn named(&self) -> String {
+        let mut ids: Vec<(&String, &u64)> = self
+            .by
+            .iter()
+            .filter(|(k, _)| !k.starts_with(OWN))
+            .collect();
+        ids.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let own = self.by.keys().filter(|k| k.starts_with(OWN)).count();
+        let mut parts: Vec<String> = ids.iter().map(|(id, _)| format!("`{id}`")).collect();
+        match own {
+            0 => {}
+            1 => parts.push("one of your own patterns".into()),
+            n => parts.push(format!("{n} of your own patterns")),
+        }
+        if parts.len() > MAX_NAMED {
+            let more = parts.len() - MAX_NAMED;
+            parts.truncate(MAX_NAMED);
+            parts.push(format!("{more} more"));
+        }
+        and_list(&parts)
+    }
+
+    /// Each pattern and its count, for the details: every one, uncapped.
+    fn counted(&self) -> String {
+        let mut ids: Vec<(&String, &u64)> = self.by.iter().collect();
+        ids.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        ids.iter()
+            .map(|(k, n)| match k.strip_prefix(OWN) {
+                Some(place) => format!("{n} by your own pattern {place}"),
+                None => format!("{n} `{k}`"),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// How a config's own pattern is kept in a tally: never as itself.
+const OWN: &str = "own ";
+
+fn name_of(m: Matched) -> String {
+    match m {
+        Matched::Builtin(id) => id.to_string(),
+        Matched::Own(place) => format!("{OWN}{place}"),
+    }
+}
 
 /// The longest line matched at once, so a file with no newlines can't take all the memory. A
 /// token split across two reads is missed, which a log line never is.
@@ -118,7 +205,7 @@ fn build(table: toml::Table, shared: &Shared) -> Result<Box<dyn Check>, String> 
 struct Group {
     /// As a sentence shows it.
     name: String,
-    hits: u64,
+    tally: Tally,
 }
 
 /// The journal's record, in the check's own directory.
@@ -128,10 +215,22 @@ const RECORD: &str = "journal.json";
 /// cursor and the total can never disagree: a total lost while the cursor moved on would clear a
 /// FAIL with no new hits.
 #[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 struct Journal {
     /// None: read this boot from the start, and replace the total rather than add to it.
     cursor: Option<String>,
     total: u64,
+    /// Which patterns made the total, by name, and how many lines each.
+    by: BTreeMap<String, u64>,
+}
+
+impl Journal {
+    fn tally(&self) -> Tally {
+        Tally {
+            lines: self.total,
+            by: self.by.clone(),
+        }
+    }
 }
 
 impl Check for Secrets {
@@ -144,16 +243,16 @@ impl Check for Secrets {
         let mut unread = Vec::new();
         for path in self.files(&mut unread) {
             match self.scan(&path) {
-                Ok(0) => {}
-                Ok(hits) => {
+                Ok(t) if t.lines == 0 => {}
+                Ok(t) => {
                     let base = rotation_base(&path);
                     let group = groups
                         .entry(self.patterns.redact(&base.to_string_lossy()))
                         .or_insert(Group {
                             name: self.shown_name(&base),
-                            hits: 0,
+                            tally: Tally::default(),
                         });
-                    group.hits = group.hits.saturating_add(hits);
+                    group.tally.add(&t);
                 }
                 Err(label) => unread.push(label),
             }
@@ -161,39 +260,62 @@ impl Check for Secrets {
         let (journal, why) = if self.journal {
             self.journal(&at.state)
         } else {
-            (0, None)
+            (Tally::default(), None)
         };
         unread.extend(why);
 
         let total = groups
             .values()
-            .fold(journal, |sum, g| sum.saturating_add(g.hits));
+            .fold(journal.lines, |sum, g| sum.saturating_add(g.tally.lines));
         if total > 0 {
             let unusual = shown("", "log");
-            let mut counts: Vec<String> = groups
+            // Where, as a sentence names it, and what was found there.
+            let mut places: Vec<(String, Tally)> = groups
                 .values()
                 .filter(|g| g.name != unusual)
-                .map(|g| format!("{} in {}", g.hits, g.name))
+                .map(|g| (g.name.clone(), g.tally.clone()))
                 .collect();
             // Logs it can't name are told apart only by their count, which reads better as one.
-            let odd: Vec<u64> = groups
+            let odd: Vec<&Tally> = groups
                 .values()
                 .filter(|g| g.name == unusual)
-                .map(|g| g.hits)
+                .map(|g| &g.tally)
                 .collect();
-            match odd.len() {
-                0 => {}
-                1 => counts.push(format!("{} in {unusual}", odd[0])),
-                n => counts.push(format!(
-                    "{} in {n} logs with unusual names",
-                    odd.iter().fold(0u64, |sum, n| sum.saturating_add(*n))
-                )),
+            if !odd.is_empty() {
+                let mut all = Tally::default();
+                odd.iter().for_each(|t| all.add(t));
+                let place = match odd.len() {
+                    1 => unusual.clone(),
+                    n => format!("{n} logs with unusual names"),
+                };
+                places.push((place, all));
             }
             let mut fingerprint: Vec<String> = groups.keys().cloned().collect();
-            if journal > 0 {
-                counts.push(format!("{journal} in the journal"));
+            if journal.lines > 0 {
+                places.push(("the journal".into(), journal.clone()));
                 fingerprint.push("journal".into());
             }
+            let counts: Vec<String> = places
+                .iter()
+                .map(|(place, t)| match t.named() {
+                    // A record kept before it kept names says only how many.
+                    names if names.is_empty() => format!("{} in {place}", t.lines),
+                    names => format!("{} in {place} matched {names}", t.lines),
+                })
+                .collect();
+            let details: Vec<String> = places
+                .iter()
+                .map(|(place, t)| {
+                    let lines = match t.lines {
+                        1 => "1 line".to_string(),
+                        n => format!("{n} lines"),
+                    };
+                    match t.counted() {
+                        by if by.is_empty() => format!("{place}: {lines}."),
+                        by => format!("{place}: {lines}, {by}."),
+                    }
+                })
+                .collect();
             let also = if unread.is_empty() {
                 String::new()
             } else {
@@ -202,13 +324,13 @@ impl Check for Secrets {
             };
             return Finding::fail()
                 .says(format!(
-                    "Something on {} logged a secret ({}), so rotate it and find what logged \
-                     it{also}.",
+                    "Something on {} logged a secret, so rotate it and find what logged it: \
+                     {}{also}.",
                     at.host,
-                    and_list(&counts)
+                    counts.join("; ")
                 ))
                 .see_dry_run()
-                .details(COUNTS_ONLY)
+                .details(format!("{}\n{COUNTS_ONLY}", details.join("\n")))
                 .fingerprint(fingerprint.join(","))
                 .count(total);
         }
@@ -247,7 +369,7 @@ impl Secrets {
     /// Lines with a hit in one log, or how to say it couldn't be scanned. Regular files only, and
     /// never through a link: a FIFO named `*.log` would block for good, and a link to `/dev/zero`
     /// would never end.
-    fn scan(&self, path: &Path) -> Result<u64, String> {
+    fn scan(&self, path: &Path) -> Result<Tally, String> {
         let name = self.shown_name(path);
         let f = OpenOptions::new()
             .read(true)
@@ -273,7 +395,7 @@ impl Secrets {
         len: u64,
         gz: bool,
         name: String,
-    ) -> Result<u64, String> {
+    ) -> Result<Tally, String> {
         let limit = self.max_mb.saturating_mul(1024 * 1024);
         let too_big = || format!("{name} (over {} MB)", self.max_mb);
         if gz {
@@ -295,7 +417,7 @@ impl Secrets {
     /// The journal's running total of hits, read on from the cursor, and why it couldn't be read
     /// if it couldn't, in which case the total stands as it was. A dry run reads from the same
     /// cursor and writes nothing.
-    fn journal(&self, state: &CheckDir) -> (u64, Option<String>) {
+    fn journal(&self, state: &CheckDir) -> (Tally, Option<String>) {
         let saved: Journal = state
             .read(RECORD)
             .ok()
@@ -328,13 +450,15 @@ impl Secrets {
             Ok((status, Ok((hits, cursor)))) if status.success() => {
                 // With no cursor this boot was read from its start: after a reset, what an
                 // earlier boot logged isn't in it, so the total never goes below what was kept.
-                let total = match saved.cursor {
-                    Some(_) => saved.total.saturating_add(hits),
-                    None => saved.total.max(hits),
-                };
+                let mut tally = saved.tally();
+                match saved.cursor {
+                    Some(_) => tally.add(&hits),
+                    None => tally.most(&hits),
+                }
                 let next = Journal {
                     cursor: cursor.or(saved.cursor.clone()),
-                    total,
+                    total: tally.lines,
+                    by: tally.by,
                 };
                 (Some(next), None)
             }
@@ -350,6 +474,7 @@ impl Secrets {
                 let reset = Journal {
                     cursor: None,
                     total: saved.total,
+                    by: saved.by.clone(),
                 };
                 (
                     Some(reset),
@@ -359,7 +484,7 @@ impl Secrets {
             _ => (None, Some("journal".to_string())),
         };
         // What was read counts even if it can't be kept; a reset keeps the total as it stood.
-        let total = next.as_ref().map_or(saved.total, |n| n.total);
+        let tally = next.as_ref().map_or(saved.tally(), Journal::tally);
         // The one write. A dry run reads from the same cursor, and its directory keeps nothing.
         if let Some(next) = &next {
             let kept = serde_json::to_vec(next)
@@ -371,7 +496,7 @@ impl Secrets {
                 why = because("its cursor can't be kept");
             }
         }
-        (total, why)
+        (tally, why)
     }
 }
 
@@ -412,17 +537,18 @@ impl<R: Read> Read for Capped<R> {
 }
 
 /// Lines with a hit.
-fn count(patterns: &SecretPatterns, r: impl Read) -> io::Result<u64> {
+fn count(patterns: &SecretPatterns, r: impl Read) -> io::Result<Tally> {
     let mut r = BufReader::new(r);
     let mut line = Vec::new();
-    let mut n = 0;
+    let mut tally = Tally::default();
     loop {
         line.clear();
         if (&mut r).take(LINE_MAX).read_until(b'\n', &mut line)? == 0 {
-            return Ok(n);
+            return Ok(tally);
         }
+        // Which patterns, only for a line that has a hit: most lines don't.
         if patterns.found_in(&line) {
-            n += 1;
+            tally.line(&patterns.which(&line));
         }
     }
 }
@@ -431,10 +557,10 @@ fn count(patterns: &SecretPatterns, r: impl Read) -> io::Result<u64> {
 /// `FIELD=value` lines and a blank line, its first field `__CURSOR`. A field whose value isn't
 /// text is its name alone on a line, then its length as eight little-endian bytes, the value,
 /// and a newline, so it's read by length rather than by line.
-fn read_export(patterns: &SecretPatterns, r: impl Read) -> io::Result<(u64, Option<String>)> {
+fn read_export(patterns: &SecretPatterns, r: impl Read) -> io::Result<(Tally, Option<String>)> {
     let mut r = BufReader::new(r);
     let mut line = Vec::new();
-    let (mut hits, mut cursor) = (0, None);
+    let (mut hits, mut cursor) = (Tally::default(), None);
     let (mut entry_start, mut whole_line) = (true, true);
     loop {
         line.clear();
@@ -463,7 +589,7 @@ fn read_export(patterns: &SecretPatterns, r: impl Read) -> io::Result<(u64, Opti
             let mut value = Vec::new();
             (&mut r).take(len.min(LINE_MAX)).read_to_end(&mut value)?;
             if patterns.found_in(&value) {
-                hits += 1;
+                hits.line(&patterns.which(&value));
             }
             io::copy(
                 &mut (&mut r).take(len - value.len() as u64),
@@ -473,7 +599,7 @@ fn read_export(patterns: &SecretPatterns, r: impl Read) -> io::Result<(u64, Opti
             continue;
         }
         if patterns.found_in(&line) {
-            hits += 1;
+            hits.line(&patterns.which(&line));
         }
     }
 }
@@ -577,7 +703,7 @@ mod tests {
         export.extend(binary("MESSAGE", value.as_bytes()));
         export.extend(format!("_CMDLINE=x {token}\n\n").as_bytes());
         let (hits, cursor) = read_export(&SecretPatterns::builtins(), &export[..]).unwrap();
-        assert_eq!(hits, 2);
+        assert_eq!(hits.lines, 2);
         assert_eq!(cursor.as_deref(), Some("s=1;i=2"));
     }
 
@@ -610,14 +736,18 @@ mod tests {
             .write_all(format!("{token}\n").repeat(1000).as_bytes())
             .unwrap();
         assert_eq!(
-            secrets(200).count_opened(f, len, false, "app.log".into()),
+            secrets(200)
+                .count_opened(f, len, false, "app.log".into())
+                .map(|t| t.lines),
             Ok(0)
         );
         // Opened again, the same file is read to its new end.
         let f = std::fs::File::open(&path).unwrap();
         let len = f.metadata().unwrap().len();
         assert_eq!(
-            secrets(200).count_opened(f, len, false, "app.log".into()),
+            secrets(200)
+                .count_opened(f, len, false, "app.log".into())
+                .map(|t| t.lines),
             Ok(1000)
         );
     }
@@ -643,7 +773,9 @@ mod tests {
             Err("app.log.1.gz (over 1 MB)".into())
         );
         assert_eq!(
-            secrets(3).count_opened(open(), 0, true, "app.log.1.gz".into()),
+            secrets(3)
+                .count_opened(open(), 0, true, "app.log.1.gz".into())
+                .map(|t| t.lines),
             Ok(0)
         );
     }
