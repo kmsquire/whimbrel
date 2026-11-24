@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# package TARGET: put a proven release build for TARGET in dist/ as
+#   whimbrel-<version>-<target>.tar.gz   the binary, the README, the config reference and the
+#                                        licenses
+#   <that>.sha256                        its checksum
+#   whimbrel-<version>-<target>.BUILDINFO  the version, the commit, the target, the toolchain and
+#                                          the CI run; publish checks the tag against its version
+set -euo pipefail
+
+target=${1:?usage: package TARGET}
+: "${WHIMBREL_COMMIT:?set WHIMBREL_COMMIT to the commit that was built}"
+BINS=(whimbrel)
+
+# The crate's version: `cargo pkgid` ends in "#<version>" or "@<version>".
+id=$(cargo pkgid)
+version=${id##*[#@]}
+name=whimbrel-$version-$target
+rm -rf "dist/$name" && mkdir -p "dist/$name"
+for b in "${BINS[@]}"; do cp "target/$target/release/$b" "dist/$name/"; done
+mkdir -p "dist/$name/docs"
+cp README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md "dist/$name/"
+cp docs/config.md "dist/$name/docs/"
+tar -C dist -czf "dist/$name.tar.gz" "$name"
+rm -rf "dist/${name:?}"
+(cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+{
+  echo "version $version"
+  echo "commit $WHIMBREL_COMMIT"
+  echo "target $target"
+  rustc --version
+  cargo --version
+  if [[ -n ${GITHUB_RUN_ID:-} ]]; then echo "run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"; fi
+} > "dist/$name.BUILDINFO"
+ls -l dist && cat "dist/$name.tar.gz.sha256"

@@ -1,0 +1,40 @@
+[package]
+name = "whimbrel"
+description = "A friendly watch for your hosts."
+version = "0.3.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/kmsquire/whimbrel"
+rust-version = "1.89"
+# The contract is the command line, the config file and the result-row format. The Rust items are
+# public only so the integration tests reach them; they aren't a library API.
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
+# Only to refuse a secret pattern whose shortest match is empty; regex already builds on it.
+regex-syntax = { version = "0.8", default-features = false, features = ["std", "unicode"] }
+toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+# The built-in secret patterns are a few hundred regexes, compiled at the start of every run:
+# unoptimized, that takes seconds, and every test that starts whimbrel pays it.
+[profile.dev.package.regex-automata]
+opt-level = 3
+
+[profile.dev.package.regex-syntax]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
+
+# Its own root, so no manifest above it (a checkout nested in another) claims it.
+[workspace]

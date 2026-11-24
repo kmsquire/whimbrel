@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# prove TARGET: check a release build for TARGET before it's packaged. Fails on the first problem.
+#
+#   - the binary's --version names WHIMBREL_COMMIT (required; CI sets it to the commit built);
+#   - a macOS binary is built for its target's architecture alone and needs no macOS newer than
+#     MACOSX_DEPLOYMENT_TARGET;
+#   - a Linux binary is statically linked.
+#
+# Runs in CI and on a Mac: WHIMBREL_COMMIT=$(git rev-parse HEAD) MACOSX_DEPLOYMENT_TARGET=13.0 \
+#   cargo build --release --target x86_64-apple-darwin && scripts/prove x86_64-apple-darwin
+set -euo pipefail
+
+target=${1:?usage: prove TARGET}
+: "${WHIMBREL_COMMIT:?set WHIMBREL_COMMIT to the commit that was built}"
+BINS=(whimbrel)
+
+fail() { echo "::error::$*" >&2; exit 1; }
+
+for b in "${BINS[@]}"; do
+  f=target/$target/release/$b
+  [[ -x $f ]] || fail "$f wasn't built"
+
+  line=$("$f" --version)
+  echo "$line"
+  [[ $line == "$b "*" ($WHIMBREL_COMMIT)" ]] || fail "$b --version doesn't name $WHIMBREL_COMMIT: $line"
+
+  case $target in
+    *-apple-darwin)
+      : "${MACOSX_DEPLOYMENT_TARGET:?set MACOSX_DEPLOYMENT_TARGET}"
+      want=${target%%-*}
+      [[ $want == aarch64 ]] && want=arm64
+      archs=$(lipo -archs "$f")
+      [[ $archs == "$want" ]] || fail "$b is built for '$archs', not $want alone"
+      minos=$(otool -l "$f" | awk '/LC_BUILD_VERSION/ { seen = 1 } seen && /minos/ { print $2; exit }')
+      echo "$b minos $minos"
+      [[ $minos == "$MACOSX_DEPLOYMENT_TARGET" ]] || fail "$b needs macOS $minos, not $MACOSX_DEPLOYMENT_TARGET"
+      ;;
+    *-linux-*)
+      kind=$(file -b "$f")
+      echo "$b: $kind"
+      [[ $kind == *"statically linked"* ]] || fail "$b isn't statically linked"
+      ;;
+    *) fail "no proof for target $target" ;;
+  esac
+done

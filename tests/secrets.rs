@@ -1,0 +1,649 @@
+//! The secrets scan against fixture logs and a stand-in journalctl. Tokens are made at run time
+//! and never written to the repo.
+//!
+//! The safety branches each have a test named for them: nothing found is ever copied
+//! (`..._never_copied`, `..._name_never_goes_out`), what can't be read is said and never clean
+//! (`..._unscanned...`), a refused cursor is reset while the FAIL stands and an earlier boot's leak
+//! survives it, and a dry run leaves no trace (`a_dry_run_...`).
+
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::path::{Path, PathBuf};
+
+use whimbrel::checks::secrets::KIND;
+use whimbrel::run::Mode;
+use whimbrel::sentence::Next;
+use whimbrel::{Finding, Level};
+
+mod common;
+
+const COUNTS_ONLY: &str = "Counts only: the watch never copies what it finds.";
+
+/// A host's logs, journal and state, in a temporary directory.
+struct Machine {
+    dir: tempfile::TempDir,
+    max_mb: u64,
+    logs: Vec<PathBuf>,
+    optional_logs: Vec<String>,
+    log_dirs: Vec<PathBuf>,
+}
+
+impl Machine {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        let m = Machine {
+            logs: vec![logs.join("setup.log"), logs.join("init.log")],
+            optional_logs: vec![format!("{}/syslog*", logs.display())],
+            log_dirs: vec![dir.path().join("app")],
+            dir,
+            max_mb: 200,
+        };
+        for sub in ["logs", "app"] {
+            fs::create_dir(m.path(sub)).unwrap();
+        }
+        common::stub(m.dir.path(), "journalctl", common::JOURNALCTL);
+        for name in ["setup.log", "init.log", "syslog"] {
+            m.log(name, "ordinary line\n");
+        }
+        m
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.dir.path().join(name)
+    }
+
+    fn log(&self, name: &str, text: &str) -> PathBuf {
+        let p = self.path("logs").join(name);
+        fs::write(&p, text).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o600)).unwrap();
+        p
+    }
+
+    fn journal(&self, text: &str) {
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.path("journal"))
+            .unwrap()
+            .write_all(text.as_bytes())
+            .unwrap();
+    }
+
+    fn state(&self) -> PathBuf {
+        self.path("state")
+    }
+
+    fn record(&self) -> PathBuf {
+        self.state().join("secrets/journal.json")
+    }
+
+    fn table(&self, journalctl: &Path) -> String {
+        format!(
+            "logs = {:?}\n\
+             optional_logs = {:?}\n\
+             log_dirs = {:?}\n\
+             max_mb = {}\n\
+             journal = true\n\
+             journalctl = {journalctl:?}\n\
+             journal_secs = 2\n",
+            self.logs, self.optional_logs, self.log_dirs, self.max_mb,
+        )
+    }
+
+    fn run_as(&self, mode: Mode) -> Finding {
+        // A run makes the watch's own directory before any check runs; a dry run never does.
+        if mode == Mode::Run {
+            fs::create_dir_all(self.state()).unwrap();
+        }
+        let table = self.table(&self.path("journalctl"));
+        common::run(&KIND, &table, "the test host", &self.state(), mode)
+    }
+
+    fn run(&self) -> Finding {
+        self.run_as(Mode::Run)
+    }
+
+    /// Everything the scan leaves anywhere: its finding, as it would be said, and its state.
+    fn everything(&self, f: &Finding) -> String {
+        let mut all = format!("{f:?}{}", f.sentence(common::DRY_RUN));
+        if let Ok(entries) = fs::read_dir(self.state().join("secrets")) {
+            for e in entries.flatten() {
+                all += &String::from_utf8_lossy(&fs::read(e.path()).unwrap_or_default());
+            }
+        }
+        all
+    }
+}
+
+/// What the scan says when it found something.
+fn found(counts: &str) -> String {
+    format!(
+        "Something on the test host logged a secret ({counts}), so rotate it and find what \
+         logged it."
+    )
+}
+
+fn unscanned(names: &str) -> String {
+    format!("The test host's watch couldn't scan some logs for secrets: {names}.")
+}
+
+fn gz(text: &str) -> Vec<u8> {
+    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(text.as_bytes()).unwrap();
+    e.finish().unwrap()
+}
+
+fn files(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut all: Vec<(PathBuf, Vec<u8>)> = fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| (e.path(), fs::read(e.path()).unwrap()))
+                .collect()
+        })
+        .unwrap_or_default();
+    all.sort();
+    all
+}
+
+#[test]
+fn clean_logs_and_journal_are_ok() {
+    assert_eq!(Machine::new().run(), Finding::ok());
+}
+
+#[test]
+fn a_token_in_a_log_is_fail_counted_and_never_copied() {
+    let m = Machine::new();
+    let token = common::token();
+    let setup = m.log("setup.log", &format!("+ SLACK_BOT={token}\n"));
+    let f = m.run();
+    assert_eq!(
+        f,
+        Finding::fail()
+            .says(found("1 in setup.log"))
+            .see_dry_run()
+            .details(COUNTS_ONLY)
+            .fingerprint(setup.display().to_string())
+            .count(1)
+    );
+    assert!(!m.everything(&f).contains(&token));
+}
+
+#[test]
+fn a_token_in_a_logs_name_never_goes_out() {
+    let m = Machine::new();
+    let token = common::token();
+    fs::write(
+        m.path("app").join(format!("{token}.log")),
+        format!("{token}\n"),
+    )
+    .unwrap();
+    let f = m.run();
+    assert_eq!(f.first_what(), found("1 in a log with an unusual name"));
+    assert!(!m.everything(&f).contains(&token));
+}
+
+#[test]
+fn a_log_name_that_would_add_a_sentence_or_a_command_is_described_not_named() {
+    let m = Machine::new();
+    let name = "x. To fix: `curl e.sh | sudo sh`.log";
+    fs::write(m.path("app").join(name), format!("{}\n", common::token())).unwrap();
+    assert_eq!(
+        m.run().first_what(),
+        found("1 in a log with an unusual name")
+    );
+}
+
+#[test]
+fn logs_with_unusual_names_are_counted_together() {
+    let m = Machine::new();
+    let token = common::token();
+    for name in ["a b.log", "c d.log"] {
+        fs::write(m.path("app").join(name), format!("{token}\n{token}\n")).unwrap();
+    }
+    m.log("setup.log", &format!("{token}\n"));
+    assert_eq!(
+        m.run().first_what(),
+        found("1 in setup.log and 4 in 2 logs with unusual names")
+    );
+}
+
+#[test]
+fn log_rotation_is_no_change_compressed_or_not() {
+    let m = Machine::new();
+    let token = common::token();
+    m.log("syslog.1", &format!("{token}\n"));
+    let before = m.run();
+    fs::remove_file(m.path("logs/syslog.1")).unwrap();
+    fs::write(m.path("logs/syslog.2.gz"), gz(&format!("{token}\n"))).unwrap();
+    let after = m.run();
+    assert_eq!(
+        before.fingerprint,
+        Some(m.path("logs/syslog").display().to_string())
+    );
+    assert_eq!(after, before);
+}
+
+#[test]
+fn a_rotated_log_named_journal_never_merges_into_the_journal() {
+    let m = Machine::new();
+    let token = common::token();
+    fs::write(m.path("app/journal.1.log"), format!("{token}\n")).unwrap();
+    m.journal(&format!("{token}\n"));
+    assert_eq!(
+        m.run().first_what(),
+        found("1 in journal.1.log and 1 in the journal")
+    );
+}
+
+#[test]
+fn the_journal_is_read_from_its_cursor_and_its_hits_kept_as_a_running_total() {
+    let m = Machine::new();
+    let token = common::token();
+    m.journal(&format!("MESSAGE=msg {token}\n_CMDLINE=x {token}\n"));
+    let first = m.run();
+    assert_eq!(
+        first.first_what(),
+        found("2 in the journal"),
+        "every field counts"
+    );
+    assert_eq!(first.fingerprint.as_deref(), Some("journal"));
+    // Read again from the cursor: nothing new, and the old hits stand.
+    m.journal("ordinary\n");
+    assert_eq!(m.run(), first);
+    // With no cursor it reads this boot only; with one, from it.
+    let args = fs::read_to_string(m.path("args")).unwrap();
+    let calls: Vec<&str> = args.lines().collect();
+    assert!(calls[0].ends_with(" -b"), "{}", calls[0]);
+    assert!(calls[1].ends_with(" --after-cursor=c2"), "{}", calls[1]);
+    assert!(!m.everything(&first).contains(&token));
+}
+
+#[test]
+fn another_hit_where_one_was_already_found_is_news_through_its_count() {
+    let m = Machine::new();
+    let token = common::token();
+    m.journal(&format!("{token}\n"));
+    let first = m.run();
+    m.journal(&format!("{token}\n"));
+    let more = m.run();
+    assert_eq!(more.first_what(), found("2 in the journal"));
+    // The same logs: news only because the count rose, which the ledger compares.
+    assert_eq!(more.fingerprint, first.fingerprint);
+    assert_eq!((first.count, more.count), (Some(1), Some(2)));
+}
+
+#[test]
+fn a_refused_cursor_is_reset_and_said_while_the_fail_stands_and_the_rescan_doesnt_double_count() {
+    let m = Machine::new();
+    let token = common::token();
+    m.journal(&format!("{token}\n{token}\n"));
+    let first = m.run();
+    fs::write(m.record(), r#"{"cursor": "garbage", "total": 2}"#).unwrap();
+    let reset = m.run();
+    assert_eq!(reset.level, Level::Fail, "{reset:?}");
+    assert_eq!(
+        reset.first_what(),
+        "Something on the test host logged a secret (2 in the journal), so rotate it and find \
+         what logged it; the watch also couldn't scan journal \
+         (cursor refused, so it's read again from this boot)."
+    );
+    // News: a FAIL that now says something more.
+    assert_ne!(reset.fingerprint, first.fingerprint);
+    // The rescan replaces the total, run after run, and the FAIL stays FAIL.
+    for _ in 0..3 {
+        assert_eq!(m.run(), first);
+    }
+}
+
+#[test]
+fn a_leak_in_an_earlier_boot_survives_a_reboot_and_a_reset() {
+    let m = Machine::new();
+    m.journal(&format!("{}\n", common::token()));
+    let first = m.run();
+    assert_eq!(first.first_what(), found("1 in the journal"));
+    // A reboot, then one exit journalctl gives as a refusal: the record is reset.
+    m.journal("--boot--\nordinary\n");
+    fs::write(m.path("journal.fail-once"), "").unwrap();
+    assert_eq!(m.run().level, Level::Fail);
+    // This boot, read from its start, has none of it, and the earlier leak still stands.
+    for _ in 0..2 {
+        assert_eq!(m.run(), first);
+    }
+}
+
+#[test]
+fn a_journalctl_that_dies_is_unscanned_and_leaves_the_record_alone() {
+    let m = Machine::new();
+    m.journal(&format!("{}\n", common::token()));
+    m.run();
+    let before = files(&m.state().join("secrets"));
+    fs::write(m.path("journal.killed"), "").unwrap();
+    let f = m.run();
+    assert_eq!(f.level, Level::Fail);
+    assert!(
+        f.first_what()
+            .ends_with("; the watch also couldn't scan journal."),
+        "{}",
+        f.first_what()
+    );
+    assert_eq!(files(&m.state().join("secrets")), before);
+}
+
+#[test]
+fn a_dry_run_with_a_refused_cursor_says_so_and_changes_nothing() {
+    let m = Machine::new();
+    m.journal(&format!("{}\n", common::token()));
+    m.run();
+    fs::write(m.record(), r#"{"cursor": "garbage", "total": 1}"#).unwrap();
+    let before = files(&m.state().join("secrets"));
+    let f = m.run_as(Mode::DryRun);
+    assert!(
+        f.first_what()
+            .ends_with("journal (cursor refused, so it's read again from this boot)."),
+        "{}",
+        f.first_what()
+    );
+    assert_eq!(files(&m.state().join("secrets")), before);
+}
+
+#[test]
+fn a_dry_run_counts_the_journal_but_moves_no_cursor_and_keeps_no_total() {
+    let m = Machine::new();
+    let token = common::token();
+    // Never run: a dry run makes no state at all.
+    m.journal(&format!("{token}\n"));
+    assert_eq!(
+        m.run_as(Mode::DryRun).first_what(),
+        found("1 in the journal")
+    );
+    assert!(!m.state().exists());
+    // After a run, it reads from the cursor and adds to the total, and leaves both as they were.
+    m.run();
+    let before = files(&m.state().join("secrets"));
+    m.journal(&format!("{token}\n"));
+    assert_eq!(
+        m.run_as(Mode::DryRun).first_what(),
+        found("2 in the journal")
+    );
+    assert_eq!(files(&m.state().join("secrets")), before);
+    assert_eq!(m.run().first_what(), found("2 in the journal"));
+}
+
+#[test]
+fn nowhere_to_keep_the_cursor_is_said() {
+    let m = Machine::new();
+    fs::create_dir_all(m.state()).unwrap();
+    // Its directory is a file, so there's nowhere to keep the record.
+    fs::write(m.state().join("secrets"), "").unwrap();
+    let f = m.run();
+    assert_eq!(f.level, Level::Warn, "{f:?}");
+    assert_eq!(
+        f.first_what(),
+        unscanned("journal (no place to keep its cursor)")
+    );
+}
+
+#[test]
+fn with_nowhere_to_keep_the_cursor_a_hit_in_the_journal_is_still_fail_and_counted() {
+    let m = Machine::new();
+    fs::create_dir_all(m.state()).unwrap();
+    fs::write(m.state().join("secrets"), "").unwrap();
+    m.journal(&format!("{}\n", common::token()));
+    let f = m.run();
+    assert_eq!(f.level, Level::Fail, "{f:?}");
+    assert_eq!(
+        f.first_what(),
+        "Something on the test host logged a secret (1 in the journal), so rotate it and find \
+         what logged it; the watch also couldn't scan journal \
+         (no place to keep its cursor)."
+    );
+    assert_eq!(f.count, Some(1));
+}
+
+#[test]
+fn a_record_that_cant_be_written_is_said_apart_from_a_missing_directory() {
+    let m = Machine::new();
+    // The directory is there, but a directory sits where the record goes.
+    fs::create_dir_all(m.record()).unwrap();
+    let f = m.run();
+    assert_eq!(f.level, Level::Warn, "{f:?}");
+    assert_eq!(
+        f.first_what(),
+        unscanned("journal (its cursor can't be kept)")
+    );
+}
+
+#[test]
+fn a_first_run_that_finds_a_token_in_the_journal_is_fail() {
+    let m = Machine::new();
+    m.journal(&format!("{}\n", common::token()));
+    assert_eq!(m.run().level, Level::Fail);
+}
+
+#[test]
+fn a_missing_boot_log_is_unscanned_not_clean() {
+    let m = Machine::new();
+    fs::remove_file(m.path("logs/init.log")).unwrap();
+    assert_eq!(
+        m.run(),
+        Finding::warn()
+            .says(unscanned("init.log"))
+            .see_dry_run()
+            .fingerprint("init.log")
+    );
+}
+
+#[test]
+fn an_unreadable_journal_is_warn_never_ok() {
+    let m = Machine::new();
+    fs::write(m.path("journal.fail"), "").unwrap();
+    assert_eq!(m.run().first_what(), unscanned("journal"));
+}
+
+#[test]
+fn a_journal_that_takes_too_long_is_unscanned() {
+    let m = Machine::new();
+    // Slow only when it's asked something: the stub's own first run, before any test, isn't.
+    let slow = common::stub(
+        m.dir.path(),
+        "slow",
+        "#!/bin/sh\n[ $# -gt 0 ] && exec sleep 10\nexit 0\n",
+    );
+    fs::create_dir_all(m.state()).unwrap();
+    let started = std::time::Instant::now();
+    let f = common::run(
+        &KIND,
+        &m.table(&slow),
+        "the test host",
+        &m.state(),
+        Mode::Run,
+    );
+    assert!(started.elapsed().as_secs() < 6, "{:?}", started.elapsed());
+    assert_eq!(f.first_what(), unscanned("journal (no answer in 2s)"));
+}
+
+#[test]
+fn a_log_under_a_log_dir_is_scanned_however_deep() {
+    let m = Machine::new();
+    fs::create_dir_all(m.path("app/jobs/a")).unwrap();
+    let token = common::token();
+    fs::write(m.path("app/jobs/a/job-run.log"), format!("{token}\n")).unwrap();
+    fs::write(m.path("app/jobs/a/notes.txt"), format!("{token}\n")).unwrap();
+    assert_eq!(m.run().first_what(), found("1 in job-run.log"));
+}
+
+#[test]
+fn a_fifo_or_a_link_is_unscanned_and_doesnt_hang_the_run() {
+    let m = Machine::new();
+    let fifo = m.path("app/pipe.log");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    symlink("/dev/zero", m.path("app/zero.log")).unwrap();
+    assert_eq!(
+        m.run().first_what(),
+        unscanned("pipe.log (not a regular file), zero.log")
+    );
+}
+
+#[test]
+fn a_linked_directory_is_never_followed() {
+    let m = Machine::new();
+    let elsewhere = m.path("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    fs::write(
+        elsewhere.join("other.log"),
+        format!("{}\n", common::token()),
+    )
+    .unwrap();
+    symlink(&elsewhere, m.path("app/linked")).unwrap();
+    // A loop, too: walking into it would never end.
+    symlink(m.path("app"), m.path("app/again")).unwrap();
+    assert_eq!(m.run(), Finding::ok());
+}
+
+// What can't be read is made unreadable by a path through a regular file, which fails for root
+// too, so these assert wherever they run.
+
+#[test]
+fn a_log_dir_it_cant_list_is_unscanned() {
+    let mut m = Machine::new();
+    m.log_dirs.push(m.path("logs/setup.log"));
+    assert_eq!(m.run().first_what(), unscanned("setup.log"));
+}
+
+#[test]
+fn an_unreadable_log_is_unscanned() {
+    let mut m = Machine::new();
+    m.logs[1] = m.path("logs/setup.log/init.log");
+    assert_eq!(m.run().first_what(), unscanned("init.log"));
+}
+
+#[test]
+fn an_unreadable_directory_of_other_logs_is_unscanned() {
+    let mut m = Machine::new();
+    m.optional_logs = vec![format!("{}/syslog*", m.path("logs/setup.log").display())];
+    assert_eq!(m.run().first_what(), unscanned("setup.log"));
+}
+
+#[test]
+fn a_truncated_gz_is_unscanned_not_a_crash() {
+    let m = Machine::new();
+    let whole = gz(&format!("{}\n", common::token()).repeat(50));
+    fs::write(m.path("logs/syslog.3.gz"), &whole[..40]).unwrap();
+    assert_eq!(m.run().first_what(), unscanned("syslog.3.gz"));
+}
+
+#[test]
+fn a_log_too_big_to_scan_is_unscanned_not_skipped() {
+    let mut m = Machine::new();
+    m.max_mb = 0;
+    assert_eq!(
+        m.run().first_what(),
+        unscanned("setup.log (over 0 MB), init.log (over 0 MB), syslog (over 0 MB)")
+    );
+}
+
+#[test]
+fn its_state_is_owner_only() {
+    let m = Machine::new();
+    m.run();
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&m.state().join("secrets")), 0o700);
+    assert_eq!(mode(&m.record()), 0o600);
+}
+
+#[test]
+fn what_to_run_is_a_dry_run() {
+    let m = Machine::new();
+    m.log("setup.log", &format!("{}\n", common::token()));
+    assert_eq!(m.run().problems[0].next, Some(Next::DryRun));
+}
+
+#[test]
+fn the_journal_is_read_only_when_asked() {
+    let m = Machine::new();
+    let table = m
+        .table(&m.path("journalctl"))
+        .replace("journal = true\n", "");
+    fs::create_dir_all(m.state()).unwrap();
+    m.journal(&format!("{}\n", common::token()));
+    let f = common::run(&KIND, &table, "the test host", &m.state(), Mode::Run);
+    assert_eq!(f, Finding::ok());
+    assert!(!m.path("args").exists(), "journalctl ran");
+}
+
+/// The check's table refused, and why.
+fn refused(table: &str, patterns: &whimbrel::secret_patterns::SecretPatterns) -> String {
+    let table: whimbrel::toml::Table = whimbrel::toml::from_str(table).unwrap();
+    let shared = whimbrel::Shared {
+        secret_patterns: patterns,
+    };
+    KIND.configure(table, &shared).err().unwrap()
+}
+
+#[test]
+fn a_scan_with_nothing_to_scan_or_nothing_to_look_for_is_refused() {
+    use whimbrel::secret_patterns::SecretPatterns;
+    let builtins = SecretPatterns::builtins();
+    assert_eq!(
+        refused("", &builtins),
+        "there's nothing to scan: set logs, optional_logs, log_dirs or journal"
+    );
+    let none = SecretPatterns::new(false, &[], &[]).unwrap();
+    assert_eq!(
+        refused("journal = true", &none),
+        "there are no secret patterns to look for: secret_patterns has its built-ins off and \
+         none of its own"
+    );
+    assert_eq!(
+        refused("logs = [\"relative.log\"]", &builtins),
+        "every log and log directory must be an absolute path"
+    );
+}
+
+#[test]
+fn a_config_pattern_is_found_like_a_builtin() {
+    use whimbrel::secret_patterns::SecretPatterns;
+    let m = Machine::new();
+    m.log("setup.log", "issued myco_0123abcd to the worker\n");
+    let mine = SecretPatterns::new(false, &[], &["myco_[0-9a-f]{8}".into()]).unwrap();
+    let table: whimbrel::toml::Table =
+        whimbrel::toml::from_str(&m.table(&m.path("journalctl"))).unwrap();
+    let shared = whimbrel::Shared {
+        secret_patterns: &mine,
+    };
+    let check = KIND.configure(table, &shared).unwrap();
+    fs::create_dir_all(m.state()).unwrap();
+    let run = whimbrel::Run {
+        now: std::time::SystemTime::UNIX_EPOCH,
+        host: "the test host",
+        state_dir: &m.state(),
+        mode: Mode::Run,
+    };
+    let f = check.find(&run);
+    assert_eq!(f.level, Level::Fail);
+    assert_eq!(f.first_what(), found("1 in setup.log"));
+    assert!(!m.everything(&f).contains("myco_0123abcd"));
+}
+
+#[test]
+fn a_journal_timeout_of_zero_or_past_a_day_is_refused() {
+    for secs in [0u64, 86_401] {
+        let table: whimbrel::toml::Table =
+            whimbrel::toml::from_str(&format!("journal = true\njournal_secs = {secs}")).unwrap();
+        let why = common::configure(&KIND, table).err();
+        assert_eq!(
+            why.as_deref(),
+            Some("journal_secs must be from 1 to 86400"),
+            "{secs}"
+        );
+    }
+}
