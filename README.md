@@ -63,7 +63,7 @@ To download, verify, and unpack a release, set `t` to the target for your machin
 following commands:
 
 ```sh
-v=0.3.0 t=x86_64-unknown-linux-musl
+v=0.4.0 t=x86_64-unknown-linux-musl
 curl -LO https://github.com/kmsquire/whimbrel/releases/download/v$v/whimbrel-$v-$t.tar.gz
 gh attestation verify whimbrel-$v-$t.tar.gz --repo kmsquire/whimbrel \
   --signer-workflow kmsquire/whimbrel/.github/workflows/ci.yml --source-ref refs/tags/v$v
@@ -97,7 +97,7 @@ sudo install -m 755 whimbrel-$v-$t/whimbrel "$B/"
 On any other platform, build whimbrel with a Rust toolchain:
 
 ```sh
-cargo install --locked --git https://github.com/kmsquire/whimbrel --tag v0.3.0
+cargo install --locked --git https://github.com/kmsquire/whimbrel --tag v0.4.0
 ```
 
 ## Send your first alert
