@@ -107,7 +107,7 @@ impl Machine {
 
     /// Everything the scan leaves anywhere: its finding, as it would be said, and its state.
     fn everything(&self, f: &Finding) -> String {
-        let mut all = format!("{f:?}{}", f.sentence(common::DRY_RUN));
+        let mut all = format!("{f:?}{}", f.sentence(&common::commands()));
         if let Ok(entries) = fs::read_dir(self.state().join("secrets")) {
             for e in entries.flatten() {
                 all += &String::from_utf8_lossy(&fs::read(e.path()).unwrap_or_default());
@@ -115,6 +115,50 @@ impl Machine {
         }
         all
     }
+}
+
+impl Machine {
+    /// A whole config for the binary, with this machine's scan as its one check.
+    fn config(&self) -> PathBuf {
+        let path = self.path("whimbrel.toml");
+        let text = format!(
+            "host = \"the test host\"\nstate_dir = {:?}\n\n[[check]]\nkind = \"secrets\"\n{}",
+            self.state(),
+            self.table(&self.path("journalctl"))
+        );
+        fs::write(&path, text).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    }
+
+    /// `whimbrel secrets` on this machine's config, with `extra` arguments: its exit code, stdout
+    /// and stderr.
+    fn secrets_command(&self, extra: &[&str]) -> (Option<i32>, String, String) {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_whimbrel"))
+            .arg("secrets")
+            .arg("--config")
+            .arg(self.config())
+            .args(extra)
+            .output()
+            .unwrap();
+        (
+            out.status.code(),
+            String::from_utf8(out.stdout).unwrap(),
+            String::from_utf8(out.stderr).unwrap(),
+        )
+    }
+
+    /// `whimbrel secrets --allow-non-terminal`'s output, which must succeed.
+    fn shown(&self) -> String {
+        let (code, out, err) = self.secrets_command(&["--allow-non-terminal"]);
+        assert_eq!(code, Some(0), "{err}");
+        out
+    }
+}
+
+/// A Slack-shaped token as the secrets command shows it: its prefix and its last four.
+fn masked(token: &str) -> String {
+    format!("xoxb-…{}", &token[token.len() - 4..])
 }
 
 /// What the scan says when it found something.
@@ -168,7 +212,7 @@ fn a_token_in_a_log_is_fail_counted_and_never_copied() {
         f,
         Finding::fail()
             .says(found(&[slack("1 in setup.log")].join("; ")))
-            .see_dry_run()
+            .next(Next::SecretsCommand)
             .details(format!(
                 "setup.log: 1 line, 1 `slack-bot-token`.\n{COUNTS_ONLY}"
             ))
@@ -597,9 +641,19 @@ fn its_state_is_owner_only() {
 }
 
 #[test]
-fn what_to_run_is_a_dry_run() {
+fn what_to_run_about_a_hit_is_the_secrets_command_and_about_a_gap_a_dry_run() {
     let m = Machine::new();
     m.log("setup.log", &format!("{}\n", common::token()));
+    let f = m.run();
+    assert_eq!(f.problems[0].next, Some(Next::SecretsCommand));
+    assert!(
+        f.sentence(&common::commands())
+            .ends_with(" See `whimbrel secrets --config /etc/whimbrel.toml`."),
+        "{}",
+        f.sentence(&common::commands())
+    );
+    fs::remove_file(m.path("logs/init.log")).unwrap();
+    m.log("setup.log", "ordinary line\n");
     assert_eq!(m.run().problems[0].next, Some(Next::DryRun));
 }
 
@@ -802,4 +856,203 @@ fn no_matched_text_reaches_the_sentence_the_details_the_fingerprint_or_the_state
         // Nor any long piece of one.
         assert!(!all.contains(&token[..12]), "{all}");
     }
+}
+
+#[test]
+fn the_secrets_command_lists_every_hit_with_its_place_and_counts_as_the_alert_does() {
+    let m = Machine::new();
+    let (a, b, c, d) = (
+        common::token(),
+        common::token(),
+        common::token(),
+        common::token(),
+    );
+    let setup = m.log("setup.log", &format!("ordinary line\n+ SLACK_BOT={a}\n"));
+    // A rotated log counts with the log it was.
+    let rotated = m.log("syslog.1", &format!("{b} and again {b}\n"));
+    fs::create_dir_all(m.path("app/deep")).unwrap();
+    let deep = m.path("app/deep/worker.log");
+    fs::write(&deep, format!("one\ntwo\nthree {c}\n")).unwrap();
+    m.journal(&format!("ordinary\nmsg {d}\n"));
+    let alert = m.run();
+    let shown = m.shown();
+    let lines: Vec<&str> = shown.lines().collect();
+    for want in [
+        format!("{}:2  slack-bot-token  {}", setup.display(), masked(&a)),
+        format!("{}:1  slack-bot-token  {}", rotated.display(), masked(&b)),
+        format!("{}:3  slack-bot-token  {}", deep.display(), masked(&c)),
+        format!(
+            "journal  time unknown  MESSAGE  slack-bot-token  {}",
+            masked(&d)
+        ),
+    ] {
+        assert!(lines.contains(&want.as_str()), "no {want:?} in\n{shown}");
+    }
+    // Two matches on one line are two hits, and one line in the count.
+    let twice = format!("{}:1  slack-bot-token  {}", rotated.display(), masked(&b));
+    assert_eq!(lines.iter().filter(|l| **l == twice).count(), 2);
+    // Each place's count is the alert's, word for word; only the journal's name says it's this
+    // boot, since the alert's is a running total.
+    let details = alert.details.unwrap();
+    let want: Vec<String> = details
+        .lines()
+        .filter(|l| *l != COUNTS_ONLY)
+        .map(|l| l.replace("the journal:", "the journal, this boot:"))
+        .collect();
+    let summary: Vec<String> = shown
+        .split("\n\n")
+        .nth(1)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.starts_with(EARLIER_BOOTS))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(summary, want);
+    assert_eq!(want.len(), 4, "{details}");
+    assert!(shown.contains(EARLIER_BOOTS), "{shown}");
+}
+
+#[test]
+fn the_secrets_command_never_prints_a_whole_token() {
+    let m = Machine::new();
+    let tokens: Vec<String> = (0..3).map(|_| common::token()).collect();
+    m.log("setup.log", &format!("{}\n", tokens[0]));
+    // In a log's name, too: the path is redacted.
+    fs::write(
+        m.path("app").join(format!("{}.log", tokens[1])),
+        format!("{}\n", tokens[1]),
+    )
+    .unwrap();
+    m.journal(&format!("{}\n", tokens[2]));
+    let (code, out, err) = m.secrets_command(&["--allow-non-terminal"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(out.contains("[redacted].log:1  slack-bot-token"), "{out}");
+    for t in &tokens {
+        assert!(
+            !out.contains(t.as_str()) && !err.contains(t.as_str()),
+            "{out}{err}"
+        );
+        // Nor more than four characters running of the part that differs between tokens:
+        // everything after `xoxb-`.
+        let rest = &t[5..];
+        for i in 0..=rest.len() - 5 {
+            let window = &rest[i..i + 5];
+            assert!(!out.contains(window), "{window:?} of a token in\n{out}");
+        }
+    }
+}
+
+#[test]
+fn the_secrets_command_shows_a_quarter_of_a_short_password_in_a_url_at_most() {
+    let m = Machine::new();
+    // Built here, so the repo holds no URL with a password in it.
+    let key = format!("{}=", "password");
+    m.log("setup.log", &format!("GET https://h/api?{key}abc\n"));
+    m.log("init.log", &format!("GET https://h/api?{key}abcdef\n"));
+    let shown = m.shown();
+    // Three characters: none of them. Six: one.
+    assert!(
+        shown.contains(&format!("setup.log:1  password-in-url  ?{key}…\n")),
+        "{shown}"
+    );
+    assert!(
+        shown.contains(&format!("init.log:1  password-in-url  ?{key}…f\n")),
+        "{shown}"
+    );
+}
+
+/// How the command's note on the journal's earlier boots starts.
+const EARLIER_BOOTS: &str = "Earlier boots aren't read";
+
+#[test]
+fn the_secrets_command_shows_nothing_of_a_log_it_cant_read_to_its_end() {
+    let mut m = Machine::new();
+    m.max_mb = 1;
+    let token = common::token();
+    // A hit on its first line, then more than 1 MB of what it decompresses to.
+    let mut text = format!("{token}\n");
+    text += &"an ordinary line, again\n".repeat(60_000);
+    let path = m.path("logs").join("syslog.1.gz");
+    fs::write(&path, gz(&text)).unwrap();
+    let shown = m.shown();
+    assert!(!shown.contains("syslog.1.gz:"), "{shown}");
+    assert!(
+        shown.contains("Couldn't scan syslog.1.gz (over 1 MB)."),
+        "{shown}"
+    );
+    assert!(shown.contains("The logs: no lines."), "{shown}");
+}
+
+#[test]
+fn after_a_reboot_the_command_says_this_boots_journal_is_clean_and_earlier_ones_arent_read() {
+    let m = Machine::new();
+    m.journal(&format!("{}\n", common::token()));
+    assert_eq!(m.run().level, Level::Fail);
+    m.journal("--boot--\nordinary\n");
+    let shown = m.shown();
+    assert!(
+        shown.contains("\nthe journal, this boot: no lines.\n"),
+        "{shown}"
+    );
+    let journalctl = m.path("journalctl");
+    assert!(
+        shown.contains(&format!("run `{} -b -1`.", journalctl.display())),
+        "{shown}"
+    );
+    // The alert still says it, until the check's directory is cleared.
+    assert_eq!(m.run().level, Level::Fail);
+}
+
+#[test]
+fn the_secrets_command_refuses_to_write_anywhere_but_a_terminal_by_default() {
+    let m = Machine::new();
+    m.log("setup.log", &format!("{}\n", common::token()));
+    // The test's stdout is a pipe.
+    let (code, out, err) = m.secrets_command(&[]);
+    assert_eq!(code, Some(2));
+    assert_eq!(out, "");
+    assert!(err.contains("--allow-non-terminal"), "{err}");
+    assert!(!m.path("args").exists(), "it read the journal");
+}
+
+#[test]
+fn the_secrets_command_between_two_runs_changes_neither() {
+    let m = Machine::new();
+    let token = common::token();
+    m.log("setup.log", &format!("{token}\n"));
+    m.journal(&format!("{token}\n"));
+    let first = m.run();
+    let kept = files(&m.state().join("secrets"));
+    assert!(!kept.is_empty());
+    m.journal(&format!("{token}\n"));
+    m.shown();
+    assert_eq!(
+        files(&m.state().join("secrets")),
+        kept,
+        "it changed the check's state"
+    );
+    let args = fs::read_to_string(m.path("args")).unwrap();
+    assert!(args.lines().last().unwrap().ends_with(" -b"), "{args}");
+    // The next run reads on from its cursor: the new hit once, the first not again.
+    let second = m.run();
+    assert_eq!((first.count, second.count), (Some(2), Some(3)));
+}
+
+#[test]
+fn a_config_without_a_secrets_check_is_refused() {
+    let m = Machine::new();
+    let path = m.path("bare.toml");
+    fs::write(
+        &path,
+        format!("host = \"h\"\nstate_dir = {:?}\n", m.state()),
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_whimbrel"))
+        .args(["secrets", "--allow-non-terminal", "--config"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no secrets check"));
 }

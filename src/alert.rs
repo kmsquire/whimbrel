@@ -2,7 +2,7 @@
 
 use crate::check::{CheckResult, Level};
 use crate::secret_patterns::SecretPatterns;
-use crate::sentence::and_list;
+use crate::sentence::{Commands, and_list};
 
 /// What a channel is handed: `short` for a phone, `full` with every check's details.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,7 +17,7 @@ pub struct Alert {
 #[derive(Clone, Debug)]
 pub struct Frame {
     host: String,
-    dry_run: String,
+    commands: Commands,
     redact: SecretPatterns,
 }
 
@@ -48,14 +48,14 @@ impl Frame {
     pub fn new(host: impl Into<String>) -> Self {
         Frame {
             host: host.into(),
-            dry_run: "whimbrel dry-run".into(),
+            commands: Commands::default(),
             redact: SecretPatterns::default(),
         }
     }
 
-    /// The command for a dry run of this host's config: `whimbrel dry-run --config <file>`.
-    pub fn with_dry_run(mut self, command: impl Into<String>) -> Self {
-        self.dry_run = command.into();
+    /// The core's own commands on this host's config, for the sentences to point at.
+    pub fn with_commands(mut self, commands: Commands) -> Self {
+        self.commands = commands;
         self
     }
 
@@ -87,7 +87,7 @@ impl Frame {
             lines.extend(
                 news.current
                     .iter()
-                    .map(|r| r.finding.sentence(&self.dry_run)),
+                    .map(|r| r.finding.sentence(&self.commands)),
             );
             if !news.recovered.is_empty() {
                 lines.push(back(&news.recovered));

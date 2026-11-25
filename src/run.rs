@@ -14,6 +14,7 @@ use crate::check::Run;
 use crate::check::{CheckResult, Level, run_checks};
 use crate::config::Config;
 use crate::ledger::{Channel, Outcome, State, deliver};
+use crate::sentence::Commands;
 use crate::state::StateDir;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,10 +83,7 @@ pub(crate) fn once(
         Err(why) => return report.not_started(why),
     };
     let frame = Frame::new(&config.host)
-        .with_dry_run(format!(
-            "{program} dry-run --config {}",
-            config_path.display()
-        ))
+        .with_commands(Commands::new(program, Some(config_path)))
         .with_redact(config.secret_patterns().clone());
     let started = UNIX_EPOCH + Duration::from_secs(now);
     let run = Run {
@@ -260,7 +258,7 @@ fn log(file: Option<&Path>, line: &str) -> io::Result<()> {
 }
 
 /// `2026-11-21T10:00:00Z`.
-fn utc(secs: u64) -> String {
+pub(crate) fn utc(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     // Howard Hinnant's days-to-civil.

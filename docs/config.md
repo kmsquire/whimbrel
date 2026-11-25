@@ -5,6 +5,7 @@ whimbrel reads one TOML config file, which you name on the command line:
 ```sh
 whimbrel run --config FILE       # check, tell each channel what changed, keep the ledger
 whimbrel dry-run --config FILE   # say what each channel would be sent, and change nothing
+whimbrel secrets --config FILE   # show where each secret that the secrets check found is
 whimbrel --version
 ```
 
@@ -449,6 +450,7 @@ An alert looks like this:
 ```text
 Something on the web server logged a secret, so rotate it and find what logged it: 5 in syslog
 matched `github-pat` and `slack-bot-token`; 2 in the journal matched one of your own patterns.
+See `whimbrel secrets --config /etc/whimbrel/whimbrel.toml`.
 ```
 
 The alert names patterns as follows:
@@ -502,6 +504,51 @@ the following:
 1. Rotate the secret.
 2. Fix or remove the log.
 3. Delete the check's directory under `state_dir`, which clears the journal's count.
+
+#### Find where a secret is
+
+The alert doesn't say which token matched or where in the log it is. To find out, run the
+`secrets` command in a terminal on the host, as an account that can read the logs, which is
+usually root:
+
+```sh
+sudo whimbrel secrets --config /etc/whimbrel/whimbrel.toml
+```
+
+The command scans what each `secrets` check in the config scans, with the same patterns and
+limits. For each secret, it prints the log, the line number, the patterns that matched, and the
+secret masked:
+
+```text
+/var/log/syslog.1:4182  slack-bot-token  xoxb-…k3f9
+journal  2026-11-24 10:00:00 UTC  backup.service  MESSAGE  github-pat  ghp_…7QzA
+         journalctl -u backup.service --since '2026-11-24 10:00:00 UTC' --until '2026-11-24 10:00:01 UTC'
+
+syslog: 1 line, 1 `slack-bot-token`.
+the journal, this boot: 1 line, 1 `github-pat`.
+Earlier boots aren't read, and the alert's count of the journal includes them since it was last cleared. To read the boot before this one, run `journalctl -b -1`.
+```
+
+- **The masked secret** is the fixed start that every match of its pattern shares, which says
+  what kind of token it is, then the last four characters, which tell two tokens of one kind
+  apart. When fewer than 16 characters follow the fixed start, the command shows a quarter of
+  them at most. When two patterns match one secret, the command shows it once, masked over all
+  of both matches, and names both patterns. A match by one of your own `patterns` has no known
+  start, so the command shows the last characters alone and names the pattern by its place in
+  `patterns`. No option prints a whole secret; to see one, open the log at the line that the
+  command names.
+- **The counts** are the alert's, for each log. A log that the command can't read to its end,
+  such as a `.gz` file over `max_mb`, is unscanned, and the command shows none of its lines. For
+  the journal, the command reads the current boot from its start, so its count can differ from
+  the alert's running total, which includes earlier boots until you clear it.
+- **For a journal entry,** the command prints its time, its unit or syslog identifier, and the
+  field that matched, then a `journalctl` command that shows the entry.
+- **It writes to a terminal, by default.** The command refuses to run when its output isn't a
+  terminal, so that output that says where secrets are doesn't land in a pipe or a file by
+  accident. To write it to one anyway, add `--allow-non-terminal`. This guards against mistakes;
+  it isn't a security boundary, since a program such as `script` can pose as a terminal.
+- **It changes nothing.** The command doesn't read or move the journal cursor and doesn't write
+  to the state directory, so the next run neither misses nor repeats anything.
 
 - **Default `about`:** "the secrets scan"
 - **News:** Another log has hits, or the total count rises. An ongoing leak therefore causes an

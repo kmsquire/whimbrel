@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::run::Mode;
 use crate::secret_patterns::SecretPatterns;
-use crate::sentence::{Next, Problem};
+use crate::sentence::{Commands, Next, Problem};
 use crate::state::write_whole;
 
 /// How bad it is. Only WARN and FAIL are problems; the order is the order of badness.
@@ -184,10 +184,10 @@ impl Finding {
         self.problems.first().map_or("", |p| p.what.as_str())
     }
 
-    /// Every problem's sentences, one per line, with `dry_run` the command a dry run of this
-    /// host's config is.
-    pub fn sentence(&self, dry_run: &str) -> String {
-        let lines: Vec<String> = self.problems.iter().map(|p| p.sentence(dry_run)).collect();
+    /// Every problem's sentences, one per line, with `commands` the core's own commands on this
+    /// host's config.
+    pub fn sentence(&self, commands: &Commands) -> String {
+        let lines: Vec<String> = self.problems.iter().map(|p| p.sentence(commands)).collect();
         lines.join("\n")
     }
 
@@ -202,7 +202,9 @@ impl Finding {
 }
 
 /// Something whimbrel watches. Config picks which run on a host, and names each.
-pub trait Check {
+/// It's `Any`, so a command of the core can find the checks of one kind among those a config
+/// built, the `secrets` command its scans.
+pub trait Check: std::any::Any {
     /// Look, once. Everything it may need beyond its own table is in `at`.
     fn run(&self, at: &At) -> Finding;
 }
@@ -449,7 +451,7 @@ mod tests {
             .says("C broke.");
         assert_eq!(f.first_what(), "A broke.");
         assert_eq!(
-            f.sentence("w"),
+            f.sentence(&Commands::default()),
             "A broke. See `a`.\nB broke. To fix: `b`.\nC broke."
         );
     }
@@ -477,12 +479,12 @@ mod tests {
         assert_eq!(
             results[0]
                 .finding
-                .sentence("w dry-run --config /etc/w.toml"),
+                .sentence(&Commands::new("w", Some(Path::new("/etc/w.toml")))),
             "The watch hit a bug looking at the buggy thing, but the rest still ran. \
              See `w dry-run --config /etc/w.toml`."
         );
         assert_eq!(
-            crate::sentence::breaks("buggy", &results[0].finding.sentence("w dry-run")),
+            crate::sentence::breaks("buggy", &results[0].finding.sentence(&Commands::default())),
             Vec::<String>::new()
         );
         assert_eq!(

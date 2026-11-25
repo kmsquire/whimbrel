@@ -179,7 +179,7 @@ fn a_forged_notice_can_put_nothing_but_a_plain_unit_name_in_a_sentence() {
         f.fingerprint.as_deref(),
         Some("a unit with an unusual name")
     );
-    let said = f.sentence(common::DRY_RUN);
+    let said = f.sentence(&common::commands());
     assert!(
         !said.contains("curl") && !said.contains("service`"),
         "{said}"

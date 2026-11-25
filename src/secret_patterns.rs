@@ -138,6 +138,182 @@ impl Group {
     fn which(&self, bytes: &[u8], out: &mut Vec<Matched>) {
         out.extend(self.set.matches(bytes).iter().map(|i| self.names[i]));
     }
+
+    /// Each match in `bytes`, with what its pattern is called.
+    fn each(&self, bytes: &[u8], out: &mut Vec<(Matched, usize, usize)>) {
+        for i in self.set.matches(bytes).iter() {
+            let name = self.names[i];
+            out.extend(
+                self.each[i]
+                    .find_iter(bytes)
+                    .map(|m| (name, m.start(), m.end())),
+            );
+        }
+    }
+}
+
+/// How many characters every match of the built-in `id` starts with that are the same in every
+/// match, give or take letter case, or one of a few fixed words: the part of a token that says
+/// what kind it is, and nothing about which one. 0 for an id that isn't a built-in's. Worked out
+/// once a process.
+pub fn fixed_prefix(id: &str) -> usize {
+    static PREFIXES: std::sync::LazyLock<std::collections::HashMap<&'static str, usize>> =
+        std::sync::LazyLock::new(|| {
+            BUILTINS
+                .iter()
+                .map(|s| (s.id, fixed_start_of(s.pattern)))
+                .collect()
+        });
+    PREFIXES.get(id).copied().unwrap_or(0)
+}
+
+/// [`fixed_prefix`] of a pattern, parsed as the built-ins compile: Unicode classes off.
+fn fixed_start_of(pattern: &str) -> usize {
+    regex_syntax::ParserBuilder::new()
+        .unicode(false)
+        .utf8(false)
+        .build()
+        .parse(pattern)
+        .map_or(0, |hir| fixed_start(&hir).0)
+}
+
+/// How long the fixed start of every match of `h` is, and whether all of `h` is fixed, so what
+/// follows it may extend the start. Fixed: a literal; a letter in either case; a repetition of a
+/// fixed part an exact number of times; an alternation of words, each with a letter in it, of
+/// one length, the kind of token it is (`AKIA|ASIA`); and one separator, a class or alternation
+/// of at most two punctuation characters such as `[?&]`, which never holds a secret. An
+/// alternation of words of different lengths ends the start at the shortest. Anything else ends
+/// it where it is: a class that differs from one token to the next above all, an alternation
+/// that enumerates digits or symbols (`00|01|10|11`), and a second separator, or a separator
+/// repeated, since a run of punctuation that varies can be part of the token.
+fn fixed_start(h: &regex_syntax::hir::Hir) -> (usize, bool) {
+    walk(h, &mut false)
+}
+
+/// The two bytes or fewer of a separator: a class, or an alternation of single characters, of
+/// punctuation alone.
+fn separator(h: &regex_syntax::hir::Hir) -> bool {
+    use regex_syntax::hir::{Class, HirKind};
+    let bytes: Vec<u8> = match h.kind() {
+        HirKind::Class(Class::Bytes(c)) => {
+            c.iter().flat_map(|r| r.start()..=r.end()).take(3).collect()
+        }
+        // An alternation of single characters folds into one of these, even with Unicode off.
+        HirKind::Class(Class::Unicode(c)) => c
+            .iter()
+            .flat_map(|r| r.start()..=r.end())
+            .take(3)
+            .map(|ch| u8::try_from(ch).unwrap_or(0))
+            .collect(),
+        HirKind::Alternation(branches) => branches
+            .iter()
+            .map(|b| match b.kind() {
+                HirKind::Literal(l) if l.0.len() == 1 => Some(l.0[0]),
+                _ => None,
+            })
+            .collect::<Option<Vec<u8>>>()
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    (2..=2).contains(&bytes.len()) && bytes.iter().all(u8::is_ascii_punctuation)
+}
+
+/// [`fixed_start`], with `separated` whether the start has had its one separator.
+fn walk(h: &regex_syntax::hir::Hir, separated: &mut bool) -> (usize, bool) {
+    use regex_syntax::hir::{Class, HirKind};
+    if separator(h) {
+        return if std::mem::replace(separated, true) {
+            (0, false)
+        } else {
+            (1, true)
+        };
+    }
+    match h.kind() {
+        HirKind::Empty | HirKind::Look(_) => (0, true),
+        HirKind::Literal(l) => (l.0.len(), true),
+        HirKind::Class(Class::Bytes(c)) => {
+            let bytes: Vec<u8> = c.iter().flat_map(|r| r.start()..=r.end()).take(3).collect();
+            let one_letter = matches!(bytes[..], [a, b] if a.is_ascii_alphabetic()
+                && a.eq_ignore_ascii_case(&b));
+            if bytes.len() == 1 || one_letter {
+                (1, true)
+            } else {
+                (0, false)
+            }
+        }
+        HirKind::Class(Class::Unicode(_)) => (0, false),
+        HirKind::Capture(c) => walk(&c.sub, separated),
+        HirKind::Repetition(r) => {
+            let before = *separated;
+            let (n, whole) = walk(&r.sub, separated);
+            // A separator counts once: repeated, the start ends after the first.
+            if *separated && !before && r.min != 1 {
+                return (n.min(r.min as usize), false);
+            }
+            match (whole, r.max) {
+                (true, Some(max)) if max == r.min => (n * r.min as usize, true),
+                (true, _) => (n * r.min as usize, false),
+                (false, _) if r.min > 0 => (n, false),
+                _ => (0, false),
+            }
+        }
+        HirKind::Concat(parts) => {
+            let mut total = 0;
+            for part in parts {
+                let (n, whole) = walk(part, separated);
+                total += n;
+                if !whole {
+                    return (total, false);
+                }
+            }
+            (total, true)
+        }
+        HirKind::Alternation(branches) => {
+            if !branches.iter().all(starts_with_a_word) {
+                return (0, false);
+            }
+            let mut after = *separated;
+            let mut starts = Vec::new();
+            for b in branches {
+                let mut s = *separated;
+                starts.push(walk(b, &mut s));
+                after |= s;
+            }
+            *separated = after;
+            let shortest = starts.iter().map(|s| s.0).min().unwrap_or(0);
+            let whole = starts.iter().all(|&(n, w)| w && n == shortest);
+            (shortest, whole)
+        }
+    }
+}
+
+/// Whether the fixed start of `h` has a letter in it: a word, which an alternation of names a
+/// kind of token by, rather than digits or symbols, which are part of the token.
+fn starts_with_a_word(h: &regex_syntax::hir::Hir) -> bool {
+    use regex_syntax::hir::{Class, HirKind};
+    match h.kind() {
+        HirKind::Literal(l) => l.0.iter().any(u8::is_ascii_alphabetic),
+        HirKind::Class(Class::Bytes(c)) => {
+            let bytes: Vec<u8> = c.iter().flat_map(|r| r.start()..=r.end()).take(3).collect();
+            matches!(bytes[..], [a] | [a, _] if a.is_ascii_alphabetic())
+                && fixed_start(h) == (1, true)
+        }
+        HirKind::Capture(c) => starts_with_a_word(&c.sub),
+        HirKind::Repetition(r) => r.min > 0 && starts_with_a_word(&r.sub),
+        HirKind::Concat(parts) => {
+            for part in parts {
+                if starts_with_a_word(part) {
+                    return true;
+                }
+                if !fixed_start(part).1 {
+                    return false;
+                }
+            }
+            false
+        }
+        HirKind::Alternation(branches) => branches.iter().all(starts_with_a_word),
+        _ => false,
+    }
 }
 
 /// What a match is called, for saying which pattern found it, never what it found: a built-in's
@@ -289,6 +465,18 @@ impl SecretPatterns {
     /// Whether `bytes` hold a match.
     pub fn found_in(&self, bytes: &[u8]) -> bool {
         self.groups().any(|g| g.found_in(bytes))
+    }
+
+    /// Each match in `bytes`, as what its pattern is called and its byte offsets, by where it
+    /// starts. Two patterns that match the same text each give a match. Slower than
+    /// [`SecretPatterns::found_in`], so ask it only of what that has already found a match in.
+    pub fn each_match(&self, bytes: &[u8]) -> Vec<(Matched, usize, usize)> {
+        let mut out = Vec::new();
+        for g in self.groups() {
+            g.each(bytes, &mut out);
+        }
+        out.sort_by_key(|(m, start, end)| (*start, *end, *m));
+        out
     }
 
     /// What each pattern that matches `bytes` is called, each once, in order. Slower than
@@ -759,6 +947,106 @@ mod tests {
             );
             let less = SecretPatterns::new(true, &[id.to_string()], &[]).unwrap();
             assert_eq!(less.builtin_group().unwrap().each.len(), BUILTINS.len());
+        }
+    }
+
+    #[test]
+    fn a_fixed_start_is_literals_letter_case_and_fixed_words_never_a_class() {
+        for (pattern, want) in [
+            (r"xoxb-[0-9]{10,13}-[a-z]{4}", 5),
+            (r"(?i)\b(vca_[a-z0-9]{56})", 4),
+            (r"[aq]bcd[a-z]{16}", 0),
+            (r"abc[0-9]{2}[a-z]{16}", 3),
+            (r"\b(?:AKIA|ASIA)[A-Z2-7]{16}", 4),
+            (r"\b(?:A3T[A-Z0-9]|AKIA)[A-Z2-7]{16}", 3),
+            (r"ab(?:cd|ef)g[a-z]{16}", 5),
+            (r"ab(?:cd|e)f[a-z]{16}", 3),
+            (r"https?://x[a-z]{16}", 4),
+            (r"(?:ab){2}c[0-9]{16}", 5),
+            // A separator that varies is still fixed text; digits that vary aren't.
+            (r"[?&]password=[0-9A-Za-z]+", 10),
+            (r"(?:00|01|10|11)x[a-z]{16}", 0),
+            (r"(?:sc|ext|scauth)_[a-z]{16}", 2),
+            (r"[_-]x[a-z]{16}", 2),
+            // One separator at most, once: a run of punctuation that varies is part of a token.
+            (r"[-_]{3}[a-z]{16}", 1),
+            (r"[[:punct:]]{8}[a-z]{16}", 0),
+            (r"[-_]{2}[a-z]{16}", 1),
+            (r"(?:-|_)(?:-|_)[a-z]{16}", 1),
+            (r"[?&]x[-_]y[a-z]{16}", 2),
+        ] {
+            assert_eq!(fixed_start_of(pattern), want, "{pattern}");
+        }
+    }
+
+    #[test]
+    fn password_in_urls_fixed_start_is_its_separator_and_key() {
+        assert_eq!(fixed_prefix("password-in-url"), 10);
+    }
+
+    /// Every way the first `n` bytes of a match of `pattern` can read, as far as regex-syntax's
+    /// extractor can list them, or none if it can't list them all.
+    fn starts(pattern: &str, n: usize) -> Vec<Vec<u8>> {
+        use regex_syntax::hir::literal::{ExtractKind, Extractor};
+        let hir = regex_syntax::ParserBuilder::new()
+            .unicode(false)
+            .utf8(false)
+            .build()
+            .parse(pattern)
+            .unwrap();
+        let seq = Extractor::new()
+            .kind(ExtractKind::Prefix)
+            .limit_class(64)
+            .limit_total(100_000)
+            .limit_literal_len(64)
+            .extract(&hir);
+        seq.literals().map_or(Vec::new(), |lits| {
+            lits.iter()
+                .filter(|l| l.as_bytes().len() >= n)
+                .map(|l| l.as_bytes()[..n].to_vec())
+                .collect()
+        })
+    }
+
+    #[test]
+    fn a_builtins_fixed_start_is_a_few_words_never_a_class_that_varies() {
+        // Ignoring letter case: the kinds of token it names, `AKIA`, `ASIA` and the like, and
+        // its one separator's two readings at most. A class that leaked in, digits or a run of
+        // punctuation, would make ten or more.
+        for s in BUILTINS {
+            let n = fixed_prefix(s.id);
+            let mut kinds: Vec<Vec<u8>> = starts(s.pattern, n)
+                .into_iter()
+                .map(|start| start.iter().map(u8::to_ascii_lowercase).collect())
+                .collect();
+            kinds.sort_unstable();
+            kinds.dedup();
+            assert!(kinds.len() <= 8, "{}: {} ways to start", s.id, kinds.len());
+            for k in &kinds {
+                assert!(
+                    n == 0 || k.iter().any(u8::is_ascii_alphabetic),
+                    "{}: a start with no letter, {:?}",
+                    s.id,
+                    String::from_utf8_lossy(k)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_builtins_fixed_start_is_no_longer_than_its_shortest_match() {
+        for s in BUILTINS {
+            let p = fixed_prefix(s.id);
+            let shortest = regex_syntax::ParserBuilder::new()
+                .unicode(false)
+                .utf8(false)
+                .build()
+                .parse(s.pattern)
+                .unwrap()
+                .properties()
+                .minimum_len()
+                .unwrap();
+            assert!(p <= shortest, "{}: {p} of at least {shortest}", s.id);
         }
     }
 

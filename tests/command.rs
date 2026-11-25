@@ -190,7 +190,7 @@ fn a_row_that_breaks_the_sentence_rule_isnt_shown() {
     );
     let f = h.run(&p, "");
     assert_eq!(f.level, Level::Warn);
-    let said = f.sentence(common::DRY_RUN);
+    let said = f.sentence(&common::commands());
     assert!(!said.contains("curl"), "{said}");
     assert_eq!(
         f.first_what(),

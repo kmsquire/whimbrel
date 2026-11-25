@@ -286,6 +286,18 @@ pattern. For the list of patterns, see [Secret patterns](docs/config.md#secret-p
 list is generated from the published lists by a tool in this repository; to move it to a newer
 release of a list, see [tools/secret-patterns](tools/secret-patterns/README.md).
 
+## Commands
+
+```sh
+whimbrel run --config FILE       # check, tell each channel what changed, keep the ledger
+whimbrel dry-run --config FILE   # say what each channel would be sent, and change nothing
+whimbrel secrets --config FILE   # show where each secret that the secrets check found is
+whimbrel --version
+```
+
+The `secrets` command prints the log, line, pattern, and masked token of each match, to a
+terminal only. For details, see [Find where a secret is](docs/config.md#find-where-a-secret-is).
+
 ## Exit status
 
 The `run` command exits with one of the following statuses:

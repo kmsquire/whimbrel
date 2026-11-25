@@ -62,8 +62,10 @@ pub fn df_at(dir: &Path, percent: u32) {
     .unwrap();
 }
 
-/// The dry-run command [`run`] renders sentences with.
-pub const DRY_RUN: &str = "whimbrel dry-run --config /etc/whimbrel.toml";
+/// The commands [`run`] renders sentences with: whimbrel's, on `/etc/whimbrel.toml`.
+pub fn commands() -> whimbrel::sentence::Commands {
+    whimbrel::sentence::Commands::new("whimbrel", Some(Path::new("/etc/whimbrel.toml")))
+}
 
 /// A check of `kind` from `table`, TOML as a config would hold it less its `kind`, run once on
 /// `host` with `state_dir` as the watch's, the way a real run runs it, at the Unix epoch. Any
@@ -114,7 +116,7 @@ pub fn run_at(
         assert!(!f.problems.is_empty(), "a {:?} with nothing said", f.level);
     }
     for p in &f.problems {
-        let said = p.sentence(DRY_RUN);
+        let said = p.sentence(&commands());
         assert_eq!(
             whimbrel::sentence::breaks(&check.key, &said),
             Vec::<String>::new(),

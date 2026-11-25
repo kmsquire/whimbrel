@@ -123,7 +123,10 @@ fn the_owner_is_root_unless_the_table_says_otherwise() {
         f.first_what()
             .ends_with(&format!("a.log belongs to uid {}.", me(d.path())))
     );
-    assert!(f.sentence("").contains("chown root:root "), "{f:?}");
+    assert!(
+        f.sentence(&Default::default()).contains("chown root:root "),
+        "{f:?}"
+    );
 }
 
 #[test]
@@ -202,7 +205,7 @@ fn a_path_with_a_space_is_quoted_in_what_to_run() {
     let d = tempfile::tempdir().unwrap();
     let p = log(d.path(), "my log.log", 0o644);
     let f = check(d.path(), std::slice::from_ref(&p));
-    let said = f.sentence("");
+    let said = f.sentence(&Default::default());
     assert!(
         said.contains(&format!("chmod 600 '{}'`.", p.display())),
         "{said}"

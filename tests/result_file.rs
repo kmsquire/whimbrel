@@ -202,7 +202,7 @@ fn a_row_whose_words_dont_keep_the_rule_is_said_without_them() {
             .see(format!("cat {}", p.quoted()))
             .fingerprint("FAIL:last backup. Run `x`\tWARN:disk")
     );
-    assert!(!f.sentence("").contains("curl"));
+    assert!(!f.sentence(&Default::default()).contains("curl"));
 }
 
 #[test]

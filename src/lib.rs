@@ -48,7 +48,8 @@ pub fn version_line(name: &str, version: &str) -> String {
 /// The command line: `name` and `version` are the program's, for `--version` and usage.
 pub fn run(name: &str, version: &str, mut args: impl Iterator<Item = String>) -> ExitCode {
     let usage = format!(
-        "usage: {name} run --config FILE\n       {name} dry-run --config FILE\n       {name} --version"
+        "usage: {name} run --config FILE\n       {name} dry-run --config FILE\n       \
+         {name} secrets --config FILE [--allow-non-terminal]\n       {name} --version"
     );
     let mode = match args.next().as_deref() {
         Some("--version" | "-V") => {
@@ -59,12 +60,18 @@ pub fn run(name: &str, version: &str, mut args: impl Iterator<Item = String>) ->
             println!(
                 "{usage}\n\n\
                  run      runs the checks and tells each channel what changed since it was last told.\n\
-                 dry-run  says what each channel would be sent, and changes nothing."
+                 dry-run  says what each channel would be sent, and changes nothing.\n\
+                 secrets  shows where each secret the secrets check counts is: the file and line, or\n\
+                 \x20        the journal entry, the pattern, and the token masked. It writes only to a\n\
+                 \x20        terminal, unless --allow-non-terminal; never prints a whole token; and changes\n\
+                 \x20        nothing.\n\
+                 \x20        Run it as an account that can read the logs, usually root."
             );
             return ExitCode::SUCCESS;
         }
         Some("run") => run::Mode::Run,
         Some("dry-run") => run::Mode::DryRun,
+        Some("secrets") => return secrets(name, &usage, args),
         _ => {
             eprintln!("{usage}");
             return ExitCode::from(2);
@@ -77,20 +84,94 @@ pub fn run(name: &str, version: &str, mut args: impl Iterator<Item = String>) ->
             return ExitCode::from(2);
         }
     };
-    let config = match config::Config::load(&path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("{name}: {e}");
-            return ExitCode::from(2);
-        }
+    let Some(config) = load(
+        name,
+        &path,
+        &mut std::io::stderr(),
+        config::Config::warnings,
+    ) else {
+        return ExitCode::from(2);
     };
-    for warning in config.warnings() {
-        eprintln!("{name}: warning: {warning}");
-    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     run::once(&config, &path, name, mode, now).into()
+}
+
+/// The config at `path`, as every command loads it: a refusal, or each of `warnings` about it,
+/// written to `err` under `name`. The one place a command loads a config, so none of them skips
+/// a warning.
+fn load(
+    name: &str,
+    path: &std::path::Path,
+    err: &mut dyn std::io::Write,
+    warnings: fn(&config::Config) -> Vec<String>,
+) -> Option<config::Config> {
+    match config::Config::load(path) {
+        Ok(config) => {
+            for warning in warnings(&config) {
+                let _ = writeln!(err, "{name}: warning: {warning}");
+            }
+            Some(config)
+        }
+        Err(e) => {
+            let _ = writeln!(err, "{name}: {e}");
+            None
+        }
+    }
+}
+
+/// The `secrets` command: `--config FILE`, and `--allow-non-terminal` to write to a pipe, a file
+/// or anything else that isn't a terminal. What it prints shows where secrets are, so by default
+/// it writes only where a person is likely reading. That's a guard against an accident, such as
+/// output piped into a log, not a boundary: a program can pose as a terminal.
+fn secrets(name: &str, usage: &str, args: impl Iterator<Item = String>) -> ExitCode {
+    let (mut path, mut allow_non_terminal) = (None, false);
+    let mut args = args.peekable();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--config" if path.is_none() && args.peek().is_some() => {
+                path = args.next().map(std::path::PathBuf::from);
+            }
+            "--allow-non-terminal" if !allow_non_terminal => allow_non_terminal = true,
+            _ => {
+                eprintln!("{usage}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let Some(path) = path else {
+        eprintln!("{usage}");
+        return ExitCode::from(2);
+    };
+    // SAFETY: isatty only reads the descriptor's state.
+    if !allow_non_terminal && unsafe { libc::isatty(libc::STDOUT_FILENO) } != 1 {
+        eprintln!(
+            "{name}: secrets prints where secrets are, so it writes only to a terminal; \
+             to write it to a pipe or a file anyway, add --allow-non-terminal"
+        );
+        return ExitCode::from(2);
+    }
+    let Some(config) = load(
+        name,
+        &path,
+        &mut std::io::stderr(),
+        config::Config::warnings,
+    ) else {
+        return ExitCode::from(2);
+    };
+    let mut out = std::io::stdout().lock();
+    match checks::secrets::show(&config, &mut out) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(checks::secrets::ShowError::Config(e)) => {
+            eprintln!("{name}: {e}");
+            ExitCode::from(2)
+        }
+        Err(checks::secrets::ShowError::Output(e)) => {
+            eprintln!("{name}: couldn't write the output: {e}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -113,6 +194,33 @@ mod tests {
             .strip_prefix("whimbrel 1.2.3 (")
             .and_then(|rest| rest.strip_suffix(')'));
         assert_eq!(commit, Some(COMMIT), "{line}");
+    }
+
+    #[test]
+    fn every_command_loads_its_config_through_one_loader_that_prints_its_warnings() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("w.toml");
+        let text = format!("host = \"h\"\nstate_dir = {:?}\n", d.path().join("state"));
+        std::fs::write(&path, text).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut err = Vec::new();
+        let said = |_: &config::Config| vec!["it does nothing".to_string()];
+        assert!(load("w", &path, &mut err, said).is_some());
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            "w: warning: it does nothing\n"
+        );
+        // A config it refuses is said once, with no warnings.
+        let mut err = Vec::new();
+        assert!(load("w", &d.path().join("none.toml"), &mut err, said).is_none());
+        let err = String::from_utf8(err).unwrap();
+        assert!(err.starts_with("w: ") && !err.contains("warning"), "{err}");
+        // No command loads a config any other way, so none skips the warnings: outside the
+        // tests, only `load` calls `Config::load`.
+        let src = include_str!("lib.rs");
+        let code = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert_eq!(code.matches("Config::load(").count(), 1);
     }
 
     #[test]

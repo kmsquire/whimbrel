@@ -4,6 +4,39 @@
 //! A check gives the first as text and the second as a [`Next`], together a [`Problem`], and the
 //! core puts them together, so the second is never parsed back out of the first.
 
+/// The core's own commands on this host's config, `<program> <command> --config <path>`, which a
+/// sentence may point at and a check doesn't know.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Commands {
+    program: String,
+    config: Option<String>,
+}
+
+impl Commands {
+    /// `program`'s commands on the config at `config`, or with no `--config` when there's none.
+    pub fn new(program: impl Into<String>, config: Option<&std::path::Path>) -> Self {
+        Commands {
+            program: program.into(),
+            config: config.map(|c| c.display().to_string()),
+        }
+    }
+
+    /// The command line for `command`: `whimbrel dry-run --config /etc/whimbrel.toml`, with the
+    /// path quoted for a shell if it needs it.
+    pub fn command(&self, command: &str) -> String {
+        match &self.config {
+            Some(config) => format!("{} {command} --config {}", self.program, quoted(config)),
+            None => format!("{} {command}", self.program),
+        }
+    }
+}
+
+impl Default for Commands {
+    fn default() -> Self {
+        Commands::new("whimbrel", None)
+    }
+}
+
 /// What to run about a problem, the second sentence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Next {
@@ -13,18 +46,22 @@ pub enum Next {
     ToFix(String),
     /// A dry run of this host's config, which the core knows and a check doesn't.
     DryRun,
+    /// The `secrets` command on this host's config, which shows where each secret the `secrets`
+    /// check counts is.
+    SecretsCommand,
     /// The second sentence as written elsewhere, by a program whose rows these are: shown
     /// as it is, never parsed.
     Written(String),
 }
 
 impl Next {
-    /// As a sentence, with `dry_run` the command a dry run of this host's config is.
-    pub fn render(&self, dry_run: &str) -> String {
+    /// As a sentence, with `commands` the core's own commands on this host's config.
+    pub fn render(&self, commands: &Commands) -> String {
         match self {
             Next::See(cmd) => format!("See `{cmd}`."),
             Next::ToFix(cmd) => format!("To fix: `{cmd}`."),
-            Next::DryRun => format!("See `{dry_run}`."),
+            Next::DryRun => format!("See `{}`.", commands.command("dry-run")),
+            Next::SecretsCommand => format!("See `{}`.", commands.command("secrets")),
             Next::Written(sentence) => sentence.clone(),
         }
     }
@@ -39,11 +76,11 @@ pub struct Problem {
 }
 
 impl Problem {
-    /// What's wrong, then what to run, if anything, with `dry_run` the command a dry run of this
-    /// host's config is.
-    pub fn sentence(&self, dry_run: &str) -> String {
+    /// What's wrong, then what to run, if anything, with `commands` the core's own commands on
+    /// this host's config.
+    pub fn sentence(&self, commands: &Commands) -> String {
         match &self.next {
-            Some(next) => format!("{} {}", self.what, next.render(dry_run)),
+            Some(next) => format!("{} {}", self.what, next.render(commands)),
             None => self.what.clone(),
         }
     }
@@ -175,12 +212,12 @@ pub fn breaks(key: &str, sentence: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn render(what: &str, next: Option<&Next>, dry_run: &str) -> String {
+    fn render(what: &str, next: Option<&Next>, config: &str) -> String {
         Problem {
             what: what.into(),
             next: next.cloned(),
         }
-        .sentence(dry_run)
+        .sentence(&Commands::new("w", Some(std::path::Path::new(config))))
     }
 
     #[test]
@@ -212,22 +249,26 @@ mod tests {
     #[test]
     fn what_to_run_is_its_own_sentence() {
         assert_eq!(
-            render(
-                "The disk is full.",
-                Some(&Next::See("df -h /".into())),
-                "w dry-run"
-            ),
+            render("The disk is full.", Some(&Next::See("df -h /".into())), "c"),
             "The disk is full. See `df -h /`."
         );
         assert_eq!(
-            render("Broken.", Some(&Next::ToFix("x".into())), "w"),
+            render("Broken.", Some(&Next::ToFix("x".into())), "c"),
             "Broken. To fix: `x`."
         );
         assert_eq!(
-            render("Broken.", Some(&Next::DryRun), "w dry-run --config c"),
+            render("Broken.", Some(&Next::DryRun), "c"),
             "Broken. See `w dry-run --config c`."
         );
-        assert_eq!(render("Broken.", None, "w"), "Broken.");
+        assert_eq!(
+            render("Leaked.", Some(&Next::SecretsCommand), "c"),
+            "Leaked. See `w secrets --config c`."
+        );
+        assert_eq!(
+            render("Broken.", Some(&Next::DryRun), "/etc/my host.toml"),
+            "Broken. See `w dry-run --config '/etc/my host.toml'`."
+        );
+        assert_eq!(render("Broken.", None, "c"), "Broken.");
         assert_eq!(
             render(
                 "Broken.",
