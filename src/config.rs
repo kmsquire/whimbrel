@@ -261,6 +261,12 @@ impl Config {
         Ok(checks)
     }
 
+    /// What the config asks that does nothing, for whoever runs whimbrel to see: a retired id
+    /// in `secret_patterns.disable`.
+    pub fn warnings(&self) -> Vec<String> {
+        crate::secret_patterns::retired_in(&self.secret_patterns.disable)
+    }
+
     /// What every alert is redacted with, and what the `secrets` check looks for.
     pub fn secret_patterns(&self) -> &SecretPatterns {
         &self.secret_patterns_compiled

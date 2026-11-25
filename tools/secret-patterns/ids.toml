@@ -1,0 +1,270 @@
+# Every id a built-in pattern has had, and the rule it names: a list's, or whimbrel's own under
+# source "whimbrel". The tool keeps this file:
+# it gives a new rule a new id, and retires the id of a rule that leaves, with the last release
+# that had it. An id is never reused. When a list renames a rule, keep its id by pointing it at
+# the new name here.
+
+[id]
+"1password-secret-key" = { source = "gitleaks", rule = "1password-secret-key" }
+"1password-service-account-token" = { source = "gitleaks", rule = "1password-service-account-token" }
+"adobe-client-secret" = { source = "gitleaks", rule = "adobe-client-secret" }
+"age-secret-key" = { source = "gitleaks", rule = "age-secret-key" }
+"aikido-ci-token" = { source = "betterleaks", rule = "aikido-ci-token" }
+"aikido-client-id" = { source = "betterleaks", rule = "aikido-client-id" }
+"aikido-client-secret" = { source = "betterleaks", rule = "aikido-client-secret" }
+"airtable-personnal-access-token" = { source = "gitleaks", rule = "airtable-personnal-access-token" }
+"alibaba-access-key-id" = { source = "gitleaks", rule = "alibaba-access-key-id" }
+"alibaba-access-key-id-betterleaks" = { source = "betterleaks", rule = "alibaba-access-key-id" }
+"alibaba-sts-access-key-id" = { source = "betterleaks", rule = "alibaba-sts-access-key-id" }
+"anthropic-admin-api-key" = { source = "gitleaks", rule = "anthropic-admin-api-key" }
+"anthropic-api-key" = { source = "gitleaks", rule = "anthropic-api-key" }
+"anthropic-oauth-access-token" = { source = "betterleaks", rule = "anthropic-oauth-access-token" }
+"anthropic-oauth-refresh-token" = { source = "betterleaks", rule = "anthropic-oauth-refresh-token" }
+"apify-api-token" = { source = "betterleaks", rule = "apify-api-token" }
+"artifactory-api-key" = { source = "gitleaks", rule = "artifactory-api-key" }
+"artifactory-api-key-betterleaks" = { source = "betterleaks", rule = "artifactory-api-key" }
+"artifactory-reference-token" = { source = "gitleaks", rule = "artifactory-reference-token" }
+"atlassian-api-token" = { source = "betterleaks", rule = "atlassian-api-token" }
+"authress-service-client-access-key" = { source = "gitleaks", rule = "authress-service-client-access-key" }
+"authress-service-client-access-key-betterleaks" = { source = "betterleaks", rule = "authress-service-client-access-key" }
+"aws-access-token" = { source = "gitleaks", rule = "aws-access-token" }
+"aws-amazon-bedrock-api-key-long-lived" = { source = "gitleaks", rule = "aws-amazon-bedrock-api-key-long-lived" }
+"azure-servicebus-connection-string" = { source = "betterleaks", rule = "azure-servicebus-connection-string" }
+"bitbucket-data-center-token" = { source = "betterleaks", rule = "bitbucket-data-center-token" }
+"bitbucket-url" = { source = "osv-scalibr", rule = "veles/secrets/gitbasicauth/bitbucket urlPattern" }
+"brave-search-api-key" = { source = "betterleaks", rule = "brave-search-api-key" }
+"buildkite-service-token" = { source = "betterleaks", rule = "buildkite-service-token" }
+"buildkite-user-access-token" = { source = "betterleaks", rule = "buildkite-user-access-token" }
+"cal-api-key" = { source = "betterleaks", rule = "cal-api-key" }
+"canadian-digital-service-notify-api-key" = { source = "betterleaks", rule = "canadian-digital-service-notify-api-key" }
+"canva-client-secret" = { source = "betterleaks", rule = "canva-client-secret" }
+"cartesia-api-key-1" = { source = "betterleaks", rule = "cartesia-api-key.1" }
+"cerebras-api-key" = { source = "betterleaks", rule = "cerebras-api-key" }
+"circleci-circle-ciproject" = { source = "osv-scalibr", rule = "veles/secrets/circleci circleCIProjectRe" }
+"circleci-personal-token" = { source = "betterleaks", rule = "circleci-personal-token" }
+"clickhouse-cloud-api-secret-key" = { source = "gitleaks", rule = "clickhouse-cloud-api-secret-key" }
+"clojars-api-token" = { source = "gitleaks", rule = "clojars-api-token" }
+"cloudflare-api-key-2" = { source = "betterleaks", rule = "cloudflare-api-key.2" }
+"cloudflare-origin-ca-key" = { source = "gitleaks", rule = "cloudflare-origin-ca-key" }
+"cloudsmith-api-key" = { source = "betterleaks", rule = "cloudsmith-api-key" }
+"cockroachlabs-cloud-api-key" = { source = "betterleaks", rule = "cockroachlabs-cloud-api-key" }
+"codecatalyst-url" = { source = "osv-scalibr", rule = "veles/secrets/gitbasicauth/codecatalyst urlPattern" }
+"codecommit-url" = { source = "osv-scalibr", rule = "veles/secrets/gitbasicauth/codecommit urlPattern" }
+"configcat-sdk-key-extended" = { source = "betterleaks", rule = "configcat-sdk-key-extended" }
+"cratesioapitoken-key" = { source = "osv-scalibr", rule = "veles/secrets/cratesioapitoken keyRe" }
+"cursorapikey-key" = { source = "osv-scalibr", rule = "veles/secrets/cursorapikey keyRe" }
+"databricks-api-token" = { source = "gitleaks", rule = "databricks-api-token" }
+"datastax-astra-application-token" = { source = "betterleaks", rule = "datastax-astra-application-token" }
+"daytona-api-key" = { source = "betterleaks", rule = "daytona-api-key" }
+"deno-account-token" = { source = "betterleaks", rule = "deno-account-token" }
+"denopat-org-pat" = { source = "osv-scalibr", rule = "veles/secrets/denopat orgPatRe" }
+"devcycle-server-sdk-key" = { source = "betterleaks", rule = "devcycle-server-sdk-key" }
+"devin-personal-api-key" = { source = "betterleaks", rule = "devin-personal-api-key" }
+"devin-service-api-key" = { source = "betterleaks", rule = "devin-service-api-key" }
+"devin-service-user-token" = { source = "betterleaks", rule = "devin-service-user-token" }
+"digitalocean-access-token" = { source = "gitleaks", rule = "digitalocean-access-token" }
+"digitalocean-pat" = { source = "gitleaks", rule = "digitalocean-pat" }
+"digitalocean-refresh-token" = { source = "gitleaks", rule = "digitalocean-refresh-token" }
+"docker-swarm-join-token" = { source = "betterleaks", rule = "docker-swarm-join-token" }
+"docker-swarm-unlock-key" = { source = "betterleaks", rule = "docker-swarm-unlock-key" }
+"dockerhub-organization-access-token" = { source = "betterleaks", rule = "dockerhub-organization-access-token" }
+"dockerhub-personal-access-token" = { source = "betterleaks", rule = "dockerhub-personal-access-token" }
+"doppler-api-token" = { source = "gitleaks", rule = "doppler-api-token" }
+"duffel-api-token" = { source = "gitleaks", rule = "duffel-api-token" }
+"dynatrace-api-token" = { source = "gitleaks", rule = "dynatrace-api-token" }
+"easypost-api-token" = { source = "gitleaks", rule = "easypost-api-token" }
+"easypost-test-api-token" = { source = "gitleaks", rule = "easypost-test-api-token" }
+"elastic-cloud-api-key" = { source = "betterleaks", rule = "elastic-cloud-api-key" }
+"exoscale-api-key" = { source = "betterleaks", rule = "exoscale-api-key" }
+"facebook-page-access-token" = { source = "gitleaks", rule = "facebook-page-access-token" }
+"figma-personal-access-token" = { source = "betterleaks", rule = "figma-personal-access-token" }
+"flutterwave-encryption-key" = { source = "gitleaks", rule = "flutterwave-encryption-key" }
+"flutterwave-public-key" = { source = "gitleaks", rule = "flutterwave-public-key" }
+"flutterwave-secret-key" = { source = "gitleaks", rule = "flutterwave-secret-key" }
+"flyio-access-token" = { source = "gitleaks", rule = "flyio-access-token" }
+"flyio-access-token-betterleaks" = { source = "betterleaks", rule = "flyio-access-token" }
+"frameio-api-token" = { source = "gitleaks", rule = "frameio-api-token" }
+"gcp-api-key" = { source = "gitleaks", rule = "gcp-api-key" }
+"gcp-gemini-api" = { source = "betterleaks", rule = "gcp-gemini-api" }
+"gcpexpressmode-key" = { source = "osv-scalibr", rule = "veles/secrets/gcpexpressmode keyRe" }
+"gcpoauth2client-client-secret" = { source = "osv-scalibr", rule = "veles/secrets/gcpoauth2client clientSecretRe" }
+"gcpsak-re-base64" = { source = "osv-scalibr", rule = "veles/secrets/gcpsak reBase64" }
+"gcshmackey-access-id" = { source = "osv-scalibr", rule = "veles/secrets/gcshmackey accessIDPattern" }
+"github-app-token" = { source = "gitleaks", rule = "github-app-token" }
+"github-fine-grained-pat" = { source = "gitleaks", rule = "github-fine-grained-pat" }
+"github-oauth" = { source = "gitleaks", rule = "github-oauth" }
+"github-pat" = { source = "gitleaks", rule = "github-pat" }
+"github-refresh-token" = { source = "gitleaks", rule = "github-refresh-token" }
+"gitlab-cicd-job-token" = { source = "gitleaks", rule = "gitlab-cicd-job-token" }
+"gitlab-deploy-token" = { source = "gitleaks", rule = "gitlab-deploy-token" }
+"gitlab-feature-flag-client-token" = { source = "gitleaks", rule = "gitlab-feature-flag-client-token" }
+"gitlab-feed-token" = { source = "gitleaks", rule = "gitlab-feed-token" }
+"gitlab-incoming-mail-token" = { source = "gitleaks", rule = "gitlab-incoming-mail-token" }
+"gitlab-kubernetes-agent-token" = { source = "gitleaks", rule = "gitlab-kubernetes-agent-token" }
+"gitlab-oauth-app-secret" = { source = "gitleaks", rule = "gitlab-oauth-app-secret" }
+"gitlab-pat" = { source = "gitleaks", rule = "gitlab-pat" }
+"gitlab-pat-routable" = { source = "gitleaks", rule = "gitlab-pat-routable" }
+"gitlab-ptt" = { source = "gitleaks", rule = "gitlab-ptt" }
+"gitlab-rrt" = { source = "gitleaks", rule = "gitlab-rrt" }
+"gitlab-runner-authentication-token" = { source = "gitleaks", rule = "gitlab-runner-authentication-token" }
+"gitlab-runner-authentication-token-routable" = { source = "gitleaks", rule = "gitlab-runner-authentication-token-routable" }
+"gitlab-scim-token" = { source = "gitleaks", rule = "gitlab-scim-token" }
+"gitlab-session-cookie" = { source = "gitleaks", rule = "gitlab-session-cookie" }
+"grafana-api-key" = { source = "gitleaks", rule = "grafana-api-key" }
+"grafana-api-key-betterleaks" = { source = "betterleaks", rule = "grafana-api-key" }
+"grafana-cloud-api-token" = { source = "gitleaks", rule = "grafana-cloud-api-token" }
+"grafana-service-account-token" = { source = "gitleaks", rule = "grafana-service-account-token" }
+"groq-api-key" = { source = "betterleaks", rule = "groq-api-key" }
+"harness-api-key" = { source = "gitleaks", rule = "harness-api-key" }
+"heroku-api-key-v2" = { source = "gitleaks", rule = "heroku-api-key-v2" }
+"herokuplatformkey-key" = { source = "osv-scalibr", rule = "veles/secrets/herokuplatformkey keyRe" }
+"huggingface-access-token" = { source = "gitleaks", rule = "huggingface-access-token" }
+"huggingface-organization-api-token" = { source = "gitleaks", rule = "huggingface-organization-api-token" }
+"infracost-api-token" = { source = "gitleaks", rule = "infracost-api-token" }
+"intra42-client-secret" = { source = "gitleaks", rule = "intra42-client-secret" }
+"ionic-personal-access-token" = { source = "betterleaks", rule = "ionic-personal-access-token" }
+"jina-ai-api-key" = { source = "betterleaks", rule = "jina-ai-api-key" }
+"labelbox-api-key" = { source = "betterleaks", rule = "labelbox-api-key" }
+"labelbox-recursion-api-key" = { source = "betterleaks", rule = "labelbox-recursion-api-key" }
+"langchain-langsmith-personal-access-token" = { source = "betterleaks", rule = "langchain-langsmith-personal-access-token" }
+"langchain-langsmith-service-key" = { source = "betterleaks", rule = "langchain-langsmith-service-key" }
+"langfuse-public-key-1" = { source = "betterleaks", rule = "langfuse-public-key.1" }
+"langfuse-secret-key-1" = { source = "betterleaks", rule = "langfuse-secret-key.1" }
+"lark-app-id" = { source = "betterleaks", rule = "lark-app-id" }
+"lichess-personal-access-token" = { source = "betterleaks", rule = "lichess-personal-access-token" }
+"linear-api-key" = { source = "gitleaks", rule = "linear-api-key" }
+"llama-cloud-api-key-1" = { source = "betterleaks", rule = "llama-cloud-api-key.1" }
+"mailersend-api-token" = { source = "betterleaks", rule = "mailersend-api-token" }
+"mapbox-api-token" = { source = "betterleaks", rule = "mapbox-api-token" }
+"mapbox-secret-token" = { source = "betterleaks", rule = "mapbox-secret-token" }
+"mercury-production-api-token" = { source = "betterleaks", rule = "mercury-production-api-token" }
+"mergify-application-key" = { source = "betterleaks", rule = "mergify-application-key" }
+"minimax-api-key" = { source = "betterleaks", rule = "minimax-api-key" }
+"miro-access-token" = { source = "betterleaks", rule = "miro-access-token" }
+"mongodb-atlas-service-account-id" = { source = "betterleaks", rule = "mongodb-atlas-service-account-id" }
+"mongodb-atlas-service-account-secret" = { source = "betterleaks", rule = "mongodb-atlas-service-account-secret" }
+"mongodb-connection-string" = { source = "betterleaks", rule = "mongodb-connection-string" }
+"neon-api-key" = { source = "betterleaks", rule = "neon-api-key" }
+"notion-api-token" = { source = "gitleaks", rule = "notion-api-token" }
+"npm-access-token" = { source = "gitleaks", rule = "npm-access-token" }
+"nuget-api-key" = { source = "betterleaks", rule = "nuget-api-key" }
+"nvidia-api-key" = { source = "betterleaks", rule = "nvidia-api-key" }
+"nylas-api-key-1" = { source = "betterleaks", rule = "nylas-api-key.1" }
+"octopus-deploy-api-key" = { source = "gitleaks", rule = "octopus-deploy-api-key" }
+"onepasswordkeys-recovery-token" = { source = "osv-scalibr", rule = "veles/secrets/onepasswordkeys recoveryTokenRe" }
+"onesignal-rich-authentication-token" = { source = "betterleaks", rule = "onesignal-rich-authentication-token" }
+"onfido-live-api-token-ca" = { source = "betterleaks", rule = "onfido-live-api-token-ca" }
+"onfido-live-api-token-eu" = { source = "betterleaks", rule = "onfido-live-api-token-eu" }
+"onfido-live-api-token-us" = { source = "betterleaks", rule = "onfido-live-api-token-us" }
+"openai-api-key" = { source = "gitleaks", rule = "openai-api-key" }
+"openrouter-api-key" = { source = "betterleaks", rule = "openrouter-api-key" }
+"openrouter-key" = { source = "osv-scalibr", rule = "veles/secrets/openrouter keyRe" }
+"openshift-user-token" = { source = "gitleaks", rule = "openshift-user-token" }
+"packagist-api-key" = { source = "osv-scalibr", rule = "veles/secrets/packagist apiKeyRe" }
+"packagist-api-secret" = { source = "osv-scalibr", rule = "veles/secrets/packagist apiSecretRe" }
+"packagist-conductor-update-token" = { source = "osv-scalibr", rule = "veles/secrets/packagist conductorUpdateTokenRe" }
+"packagist-org-read-token" = { source = "osv-scalibr", rule = "veles/secrets/packagist orgReadTokenRe" }
+"packagist-org-update-token" = { source = "osv-scalibr", rule = "veles/secrets/packagist orgUpdateTokenRe" }
+"packagist-repo-url" = { source = "osv-scalibr", rule = "veles/secrets/packagist repoURLRe" }
+"packagist-user-update-token" = { source = "osv-scalibr", rule = "veles/secrets/packagist userUpdateTokenRe" }
+"paddle-live-api-key" = { source = "betterleaks", rule = "paddle-live-api-key" }
+"password-in-url" = { source = "whimbrel", rule = "password-in-url" }
+"paystacksecretkey-sk" = { source = "osv-scalibr", rule = "veles/secrets/paystacksecretkey skRe" }
+"perplexity-api-key" = { source = "gitleaks", rule = "perplexity-api-key" }
+"persona-production-api-key" = { source = "betterleaks", rule = "persona-production-api-key" }
+"pinecone-api-key-2" = { source = "betterleaks", rule = "pinecone-api-key.2" }
+"pinterest-access-token" = { source = "betterleaks", rule = "pinterest-access-token" }
+"planetscale-api-token" = { source = "gitleaks", rule = "planetscale-api-token" }
+"planetscale-oauth-token" = { source = "gitleaks", rule = "planetscale-oauth-token" }
+"planetscale-password" = { source = "gitleaks", rule = "planetscale-password" }
+"polar-oauth-access-token" = { source = "betterleaks", rule = "polar-oauth-access-token" }
+"polar-organization-access-token" = { source = "betterleaks", rule = "polar-organization-access-token" }
+"polar-personal-access-token" = { source = "betterleaks", rule = "polar-personal-access-token" }
+"posthog-personal-api-key" = { source = "betterleaks", rule = "posthog-personal-api-key" }
+"postman-api-token" = { source = "gitleaks", rule = "postman-api-token" }
+"postmanapikey-pmat" = { source = "osv-scalibr", rule = "veles/secrets/postmanapikey pmatRe" }
+"prefect-api-token" = { source = "gitleaks", rule = "prefect-api-token" }
+"private-key" = { source = "gitleaks", rule = "private-key" }
+"privatekey-block" = { source = "osv-scalibr", rule = "veles/secrets/privatekey blockRe" }
+"proof-full-access-api-key" = { source = "betterleaks", rule = "proof-full-access-api-key" }
+"pulumi-api-token" = { source = "gitleaks", rule = "pulumi-api-token" }
+"pypi-upload-token" = { source = "gitleaks", rule = "pypi-upload-token" }
+"pypiapitoken-key" = { source = "osv-scalibr", rule = "veles/secrets/pypiapitoken keyRe" }
+"pyxkeyv1-key" = { source = "osv-scalibr", rule = "veles/secrets/pyxkeyv1 keyRe" }
+"pyxkeyv2-key" = { source = "osv-scalibr", rule = "veles/secrets/pyxkeyv2 keyRe" }
+"ramp-client-id" = { source = "betterleaks", rule = "ramp-client-id" }
+"ramp-client-secret" = { source = "betterleaks", rule = "ramp-client-secret" }
+"razorpay-key-id-1" = { source = "betterleaks", rule = "razorpay-key-id.1" }
+"readme-api-token" = { source = "gitleaks", rule = "readme-api-token" }
+"redirect-pizza-api-token-1" = { source = "betterleaks", rule = "redirect-pizza-api-token.1" }
+"render-api-key" = { source = "betterleaks", rule = "render-api-key" }
+"replicate-api-token" = { source = "betterleaks", rule = "replicate-api-token" }
+"resend-api-key-1" = { source = "betterleaks", rule = "resend-api-key.1" }
+"rootly-api-key-1" = { source = "betterleaks", rule = "rootly-api-key.1" }
+"rubygems-api-token" = { source = "gitleaks", rule = "rubygems-api-token" }
+"runpod-api-key-1" = { source = "betterleaks", rule = "runpod-api-key.1" }
+"salesforceoauth2access-token" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2access tokenRe" }
+"salesforceoauth2client-client-id" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2client clientIDRe" }
+"salesforceoauth2jwt-client-id" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2jwt clientIDRe" }
+"salesforceoauth2jwt-private-key" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2jwt privateKeyRe" }
+"salesforceoauth2refresh-client-id" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2refresh clientIDRe" }
+"samsara-api-token-1" = { source = "betterleaks", rule = "samsara-api-token.1" }
+"scalingo-api-token" = { source = "gitleaks", rule = "scalingo-api-token" }
+"segment-public-api-token-1" = { source = "betterleaks", rule = "segment-public-api-token.1" }
+"sendgrid-api-token" = { source = "gitleaks", rule = "sendgrid-api-token" }
+"sendinblue-api-token" = { source = "gitleaks", rule = "sendinblue-api-token" }
+"sentry-org-token" = { source = "gitleaks", rule = "sentry-org-token" }
+"sentry-user-token" = { source = "gitleaks", rule = "sentry-user-token" }
+"settlemint-application-access-token" = { source = "gitleaks", rule = "settlemint-application-access-token" }
+"settlemint-personal-access-token" = { source = "gitleaks", rule = "settlemint-personal-access-token" }
+"settlemint-service-access-token" = { source = "gitleaks", rule = "settlemint-service-access-token" }
+"shippo-api-token" = { source = "gitleaks", rule = "shippo-api-token" }
+"shopify-access-token" = { source = "gitleaks", rule = "shopify-access-token" }
+"shopify-custom-access-token" = { source = "gitleaks", rule = "shopify-custom-access-token" }
+"shopify-private-app-access-token" = { source = "gitleaks", rule = "shopify-private-app-access-token" }
+"shopify-shared-secret" = { source = "gitleaks", rule = "shopify-shared-secret" }
+"slack-bot-token" = { source = "gitleaks", rule = "slack-bot-token" }
+"slack-config-access-token" = { source = "gitleaks", rule = "slack-config-access-token" }
+"slack-config-refresh-token" = { source = "gitleaks", rule = "slack-config-refresh-token" }
+"slack-legacy-bot-token" = { source = "gitleaks", rule = "slack-legacy-bot-token" }
+"slack-session-cookie" = { source = "betterleaks", rule = "slack-session-cookie" }
+"slack-session-token" = { source = "betterleaks", rule = "slack-session-token" }
+"slack-user-token" = { source = "gitleaks", rule = "slack-user-token" }
+"slack-webhook-url" = { source = "gitleaks", rule = "slack-webhook-url" }
+"slacktoken-app-level-token" = { source = "osv-scalibr", rule = "veles/secrets/slacktoken appLevelTokenRe" }
+"sourcegraph-access-token" = { source = "betterleaks", rule = "sourcegraph-access-token" }
+"square-access-token" = { source = "gitleaks", rule = "square-access-token" }
+"squareapikey-o-auth-application-id" = { source = "osv-scalibr", rule = "veles/secrets/squareapikey oAuthApplicationIDRe" }
+"squareapikey-o-auth-application-secret" = { source = "osv-scalibr", rule = "veles/secrets/squareapikey oAuthApplicationSecretRe" }
+"stripe-access-token" = { source = "gitleaks", rule = "stripe-access-token" }
+"stripeapikeys-whsec" = { source = "osv-scalibr", rule = "veles/secrets/stripeapikeys whsecRe" }
+"supabase-management-token" = { source = "betterleaks", rule = "supabase-management-token" }
+"supabase-project-api-key" = { source = "betterleaks", rule = "supabase-project-api-key" }
+"supabase-project-url" = { source = "betterleaks", rule = "supabase-project-url" }
+"tailscale-api-key-1" = { source = "betterleaks", rule = "tailscale-api-key.1" }
+"tailscale-auth-key" = { source = "betterleaks", rule = "tailscale-auth-key" }
+"tailscale-key" = { source = "betterleaks", rule = "tailscale-key" }
+"tailscale-oauth-client-secret" = { source = "betterleaks", rule = "tailscale-oauth-client-secret" }
+"tailscale-scim-key" = { source = "betterleaks", rule = "tailscale-scim-key" }
+"tailscale-webhook-secret" = { source = "betterleaks", rule = "tailscale-webhook-secret" }
+"temporal-cloud-api-key-1" = { source = "betterleaks", rule = "temporal-cloud-api-key.1" }
+"thunderstore-api-token-1" = { source = "betterleaks", rule = "thunderstore-api-token.1" }
+"togetherai-api-key" = { source = "betterleaks", rule = "togetherai-api-key" }
+"unkey-root-key-1" = { source = "betterleaks", rule = "unkey-root-key.1" }
+"upcloud-api-token" = { source = "betterleaks", rule = "upcloud-api-token" }
+"upstash-redis-rest-url-1" = { source = "betterleaks", rule = "upstash-redis-rest-url.1" }
+"val-town-api-token-1" = { source = "betterleaks", rule = "val-town-api-token.1" }
+"vault-batch-token" = { source = "gitleaks", rule = "vault-batch-token" }
+"vercel-ai-gateway-key" = { source = "betterleaks", rule = "vercel-ai-gateway-key" }
+"vercel-app-access-token" = { source = "betterleaks", rule = "vercel-app-access-token" }
+"vercel-app-refresh-token" = { source = "betterleaks", rule = "vercel-app-refresh-token" }
+"vercel-integration-token" = { source = "betterleaks", rule = "vercel-integration-token" }
+"vercel-personal-access-token" = { source = "betterleaks", rule = "vercel-personal-access-token" }
+"wakatime-api-key-2" = { source = "betterleaks", rule = "wakatime-api-key.2" }
+"weights-and-biases-api-key-v1" = { source = "betterleaks", rule = "weights-and-biases-api-key-v1" }
+"workato-developer-api-token-1" = { source = "betterleaks", rule = "workato-developer-api-token.1" }
+"xai-api-key" = { source = "betterleaks", rule = "xai-api-key" }
+"xendit-production-api-key-1" = { source = "betterleaks", rule = "xendit-production-api-key.1" }
+"zuplo-consumer-api-key-1" = { source = "betterleaks", rule = "zuplo-consumer-api-key.1" }
+
+[retired]

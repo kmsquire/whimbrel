@@ -1,0 +1,37 @@
+# The hand changes to the built-in secret patterns. Each `why` is published beside its pattern, in
+# the table and in docs/config.md, so write it for a reader of the docs.
+
+# A change is one of two kinds:
+#
+# - `replace = [from, to]` changes the rule's token, the rule less its trailing boundary group,
+#   before the selection rule judges it: for a token Rust's regex can't use as published.
+# - `pattern` is published in place of the token if the rule is taken. The rule is judged as its
+#   list publishes it, so the change doesn't decide which other rules it covers.
+#
+# The tool fails if a change names a rule no list has, or a `from` the token doesn't hold, so a list
+# that fixes the rule itself is noticed.
+
+[[change]]
+source = "gitleaks"
+rule = "private-key"
+pattern = '(?i)-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----'
+why = "the header line alone, since a log is read a line at a time"
+
+[[change]]
+source = "gitleaks"
+rule = "pypi-upload-token"
+replace = ['\w', '[A-Za-z0-9_]']
+why = "an ASCII class for \\w, since the Unicode one is too big for Rust's regex"
+
+[[change]]
+source = "gitleaks"
+rule = "vault-batch-token"
+replace = ['\w', '[A-Za-z0-9_]']
+why = "an ASCII class for \\w, since the Unicode one is too big for Rust's regex"
+
+# whimbrel's own patterns, for secrets whimbrel itself handles. `why` is published as the source.
+
+[[own]]
+id = "password-in-url"
+pattern = '[?&]password=[0-9A-Za-z]+'
+why = "the bluebubbles channel sends its password, letters and digits of any length, in the URL's query, and a URL can end up in a log"

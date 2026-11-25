@@ -84,6 +84,9 @@ pub fn run(name: &str, version: &str, mut args: impl Iterator<Item = String>) ->
             return ExitCode::from(2);
         }
     };
+    for warning in config.warnings() {
+        eprintln!("{name}: warning: {warning}");
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());

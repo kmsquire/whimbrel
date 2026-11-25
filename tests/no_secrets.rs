@@ -27,7 +27,10 @@ fn no_file_in_the_repo_holds_or_is_named_with_a_token_shaped_string() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut all = Vec::new();
     files(root, &mut all);
-    assert!(all.iter().any(|p| p.ends_with("src/secret_patterns.rs")));
+    assert!(
+        all.iter()
+            .any(|p| p.ends_with("src/secret_patterns/builtins.rs"))
+    );
     let patterns = SecretPatterns::builtins();
     let mut found = Vec::new();
     for path in &all {

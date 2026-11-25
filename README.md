@@ -282,7 +282,9 @@ For details, see [Result rows](docs/config.md#result-rows).
 whimbrel redacts every alert, and every reason that a send failed, before a channel or the log
 receives it. whimbrel includes a few hundred built-in token patterns: every prefix-anchored rule
 from three published secret-scanning lists. You can add your own patterns or turn off any built-in
-pattern. For the list of patterns, see [Secret patterns](docs/config.md#secret-patterns).
+pattern. For the list of patterns, see [Secret patterns](docs/config.md#secret-patterns). The
+list is generated from the published lists by a tool in this repository; to move it to a newer
+release of a list, see [tools/secret-patterns](tools/secret-patterns/README.md).
 
 ## Exit status
 
