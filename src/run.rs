@@ -397,14 +397,18 @@ fn log_line<'a>(
     line
 }
 
-/// "WARN disk=WARN backup=OK", or "OK" with no checks.
-fn summary(results: &[CheckResult]) -> String {
-    let worst = results
+/// The worst level among `results`: OK with none.
+fn worst(results: &[CheckResult]) -> Level {
+    results
         .iter()
         .map(|r| r.finding.level)
         .max()
-        .unwrap_or(Level::Ok);
-    let mut s = worst.to_string();
+        .unwrap_or(Level::Ok)
+}
+
+/// "WARN disk=WARN backup=OK", or "OK" with no checks.
+fn summary(results: &[CheckResult]) -> String {
+    let mut s = worst(results).to_string();
     for r in results {
         let _ = write!(s, " {}={}", r.key, r.finding.level);
     }
