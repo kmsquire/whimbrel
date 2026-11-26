@@ -6,103 +6,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::Duration;
 
-use whimbrel::channels::{BlueBubbles, Curl, SecretFile, Server, Slack};
+use whimbrel::channels::{BlueBubbles, SecretFile, Server, Slack};
 use whimbrel::{Alert, Channel, Form};
 
 mod common;
 
+use common::curl::Stub;
+
 const WEBHOOK: &str = "https://hooks.slack.com/services/T000/B000/sekritsekritsekrit";
 const PASSWORD: &str = "bbpassw0rd";
 const TO: &str = "+15555550100";
-
-/// A curl that keeps its argv and stdin, prints `code` (200 by default) as `-w` would, and exits
-/// with `rc` (0 by default), after sleeping `sleep` seconds if that's set.
-struct Stub {
-    dir: tempfile::TempDir,
-}
-
-const CURL: &str = r#"#!/bin/sh
-d=$(dirname "$0")
-printf '%s\n' "$@" > "$d/args"
-cat > "$d/stdin"
-# exec, so killing curl kills the sleep too, rather than leaving it holding other tests' pipes.
-[ -f "$d/sleep" ] && exec sleep "$(cat "$d/sleep")"
-cat "$d/code" 2>/dev/null || printf 200
-exit "$(cat "$d/rc" 2>/dev/null || echo 0)"
-"#;
-
-impl Stub {
-    fn new() -> Self {
-        let dir = tempfile::tempdir().unwrap();
-        common::stub(dir.path(), "curl", CURL);
-        Stub { dir }
-    }
-
-    fn curl(&self) -> Curl {
-        Curl {
-            program: self.dir.path().join("curl"),
-            timeout: Duration::from_secs(2),
-        }
-    }
-
-    fn answer(&self, code: &str, rc: u8) {
-        fs::write(self.dir.path().join("code"), code).unwrap();
-        fs::write(self.dir.path().join("rc"), rc.to_string()).unwrap();
-    }
-
-    /// A secret file, owner-only, as the channels require.
-    fn secret(&self, name: &str, value: &str) -> SecretFile {
-        let path = self.dir.path().join(name);
-        fs::write(&path, format!("{value}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-        SecretFile::new(path).unwrap()
-    }
-
-    fn args(&self) -> String {
-        fs::read_to_string(self.dir.path().join("args")).unwrap_or_default()
-    }
-
-    /// The value of one key in the curl config it was handed, unquoted.
-    fn config(&self, key: &str) -> String {
-        let stdin = fs::read_to_string(self.dir.path().join("stdin")).unwrap();
-        let line = stdin
-            .lines()
-            .find_map(|l| l.strip_prefix(&format!("{key} = ")))
-            .unwrap_or_else(|| panic!("no {key} in {stdin:?}"));
-        unquote(line)
-    }
-
-    fn body(&self) -> serde_json::Value {
-        serde_json::from_str(&self.config("data-binary")).unwrap()
-    }
-
-    fn called(&self) -> bool {
-        self.dir.path().join("args").exists()
-    }
-}
-
-/// curl's config quoting, undone: the test's own reading of it, not the code's.
-fn unquote(s: &str) -> String {
-    let inner = s
-        .strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .unwrap();
-    let mut out = String::new();
-    let mut chars = inner.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next().unwrap() {
-                'n' => out.push('\n'),
-                't' => out.push('\t'),
-                'r' => out.push('\r'),
-                other => out.push(other),
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
 
 fn alert() -> Alert {
     Alert {
@@ -128,6 +41,9 @@ fn bluebubbles(stub: &Stub) -> BlueBubbles {
     m.curl = stub.curl();
     m
 }
+
+/// What every send hands curl on its command line, whatever the channel: the rest is on stdin.
+const ARGV: &str = "-q\n-sS\n--max-time\n2\n-w\n\\n%{http_code}\n-K\n-\n";
 
 fn assert_no_secret(why: &str) {
     for secret in [WEBHOOK, "sekrit", PASSWORD, TO] {
@@ -167,11 +83,53 @@ fn the_webhook_never_reaches_curls_argv() {
     slack(&stub).send(&alert()).unwrap();
     assert!(stub.called());
     // The whole argv: -q first, and nothing in it from the webhook.
+    assert_eq!(stub.args(), ARGV);
+}
+
+/// Each channel's secrets, written out, and the channel to send them with.
+fn every_channel(stub: &Stub) -> Vec<(Box<dyn Channel>, &'static [&'static str])> {
+    vec![
+        (Box::new(slack(stub)), &[WEBHOOK]),
+        (Box::new(bluebubbles(stub)), &[PASSWORD, TO]),
+    ]
+}
+
+#[test]
+fn no_channel_puts_a_secret_on_curls_argv() {
+    let stub = Stub::new();
+    for (mut channel, secrets) in every_channel(&stub) {
+        channel.send(&alert()).unwrap();
+        for secret in secrets {
+            assert!(
+                stub.stdin().contains(secret),
+                "{}: {secret} isn't on stdin, so this test can't see where it went",
+                channel.name()
+            );
+            assert!(
+                !stub.args().contains(secret),
+                "{}: {secret} is on curl's argv: {:?}",
+                channel.name(),
+                stub.args()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_failed_send_quotes_the_reply_without_its_secrets() {
+    let stub = Stub::new();
+    stub.answer("400", 0);
+    stub.reply(&format!(
+        "{{\"error\": \"no chat with {TO}\",\n \"password\": \"{PASSWORD}\"}}"
+    ));
+    let why = bluebubbles(&stub).send(&alert()).unwrap_err();
     assert_eq!(
-        stub.args(),
-        "-q\n-sS\n-o\n/dev/null\n-w\n%{http_code}\n--max-time\n2\n\
-         -H\nContent-Type: application/json\n-K\n-\n"
+        why,
+        r#"BlueBubbles said HTTP 400: "{\"error\": \"no chat with [redacted]\", \"password\": \"[redacted]\"}""#
     );
+    stub.reply(&format!("invalid_token {WEBHOOK}"));
+    let why = slack(&stub).send(&alert()).unwrap_err();
+    assert_eq!(why, r#"Slack said HTTP 400: "invalid_token [redacted]""#);
 }
 
 #[test]
@@ -310,13 +268,21 @@ fn bluebubbles_sends_the_short_form_to_a_one_to_one_chat() {
 
 #[test]
 fn bluebubbles_never_goes_through_a_proxy() {
+    for server in ["http://127.0.0.1:1234", "https://mac.example.net:1234"] {
+        let stub = Stub::new();
+        let mut m = bluebubbles(&stub);
+        m.server = Server::new(server).unwrap();
+        m.send(&alert()).unwrap();
+        assert_eq!(stub.config("noproxy"), "*", "{server}");
+        assert_eq!(stub.args(), ARGV);
+    }
+}
+
+#[test]
+fn slack_goes_through_a_proxy_if_the_environment_names_one() {
     let stub = Stub::new();
-    bluebubbles(&stub).send(&alert()).unwrap();
-    assert_eq!(
-        stub.args(),
-        "-q\n-sS\n-o\n/dev/null\n-w\n%{http_code}\n--max-time\n2\n\
-         -H\nContent-Type: application/json\n--noproxy\n*\n-K\n-\n"
-    );
+    slack(&stub).send(&alert()).unwrap();
+    assert_eq!(stub.config_all("noproxy"), Vec::<String>::new());
 }
 
 #[test]

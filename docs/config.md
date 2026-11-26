@@ -794,8 +794,17 @@ whimbrel reads the file at each send, so you don't need to restart anything afte
 secret. Keep the file in a directory that only root can change. When a send fails, the reason
 never includes the file's path or contents.
 
-The `slack` and `bluebubbles` channels send with `curl`. They pass the URL and the message to
-`curl` on stdin, so neither appears in a process listing. Each send has a 20-second limit.
+The `slack` and `bluebubbles` channels send with `curl`. They pass the URL, the message, and
+any credentials to `curl` on stdin, so none of them appears in a process listing. Each send has a
+20-second limit.
+
+When the far end answers a send with an HTTP status that the channel doesn't accept, the reason
+in the log gives the status and up to 200 characters of the reply on one line, in double quotes.
+For example: `Slack said HTTP 404: "no_service"`. In the excerpt, whimbrel replaces each secret
+that the request carried with `[redacted]`, and then redacts the reason like any other text.
+
+A request that carries a secret over plain `http://` never goes through a proxy, regardless of
+the environment's proxy settings, because the proxy could read it.
 
 ### `slack`
 

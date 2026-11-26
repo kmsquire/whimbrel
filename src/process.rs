@@ -46,6 +46,28 @@ pub fn run(
     stdin: &[u8],
     timeout: Duration,
 ) -> Result<Finished, Unfinished> {
+    let (status, read) = run_reading(program, args, stdin, timeout, |mut out| {
+        let mut bytes = Vec::new();
+        (&mut out).take(RUN_MAX + 1).read_to_end(&mut bytes)?;
+        io::copy(&mut out, &mut io::sink())?;
+        Ok::<_, io::Error>(bytes)
+    })?;
+    match read {
+        Ok(bytes) if bytes.len() as u64 > RUN_MAX => Err(Unfinished::TooMuch),
+        Ok(stdout) => Ok(Finished { status, stdout }),
+        Err(_) => Err(Unfinished::Unread),
+    }
+}
+
+/// [`run`], handing its stdout to `read` as it comes, so a program with a lot to say is never held
+/// in memory: `curl`, whose reply could be any size.
+pub fn run_reading<T: Send + 'static>(
+    program: impl AsRef<OsStr>,
+    args: &[impl AsRef<OsStr>],
+    stdin: &[u8],
+    timeout: Duration,
+    read: impl FnOnce(ChildStdout) -> T + Send + 'static,
+) -> Result<(ExitStatus, T), Unfinished> {
     let mut command = Command::new(program);
     command
         .args(args)
@@ -62,17 +84,7 @@ pub fn run(
         let _ = input.write_all(&stdin);
     });
     let output = child.stdout.take().expect("piped");
-    let (status, read) = finish(child, deadline(timeout), output, |mut out| {
-        let mut bytes = Vec::new();
-        (&mut out).take(RUN_MAX + 1).read_to_end(&mut bytes)?;
-        io::copy(&mut out, &mut io::sink())?;
-        Ok::<_, io::Error>(bytes)
-    })?;
-    match read {
-        Ok(bytes) if bytes.len() as u64 > RUN_MAX => Err(Unfinished::TooMuch),
-        Ok(stdout) => Ok(Finished { status, stdout }),
-        Err(_) => Err(Unfinished::Unread),
-    }
+    finish(child, deadline(timeout), output, read)
 }
 
 /// Run `program` with `args`, handing its stdout to `read` as it comes, so a program with a lot
