@@ -18,9 +18,10 @@
 //! Every check takes `key` and `about`, which default to its kind's; a key is lowercase letters,
 //! digits and dashes, since it names the check's own directory.
 //!
-//! Secrets are named by file, never written here. A Slack webhook URL anywhere in the file is
-//! refused, and an error never repeats a value from it, in case that value is a secret. The file
-//! names programs whimbrel runs, as root on a server, so it must be ours and writable by us alone.
+//! Secrets are named by file, never written here. A URL that a channel kind keeps secret, such as
+//! a Slack webhook's, is refused anywhere in the file, and an error never repeats a value from it,
+//! in case that value is a secret. The file names programs whimbrel runs, as root on a server, so
+//! it must be ours and writable by us alone.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -32,7 +33,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::channels::{BlueBubbles, Print, Slack};
+use crate::channels::{self, Curl};
 use crate::check::{Configured, Kind, Shared};
 use crate::checks::KINDS;
 use crate::checks::alerting::{self, Alerting};
@@ -59,8 +60,12 @@ pub struct Config {
     /// Each check's table, read by its kind when the checks are built.
     #[serde(default, rename = "check")]
     pub checks: Vec<toml::Table>,
+    /// Each channel's table, less its `kind`, with the kind that builds it: built once here to
+    /// check it, and again for each run.
     #[serde(default, rename = "channel")]
-    channels: Vec<ChannelConfig>,
+    channel_tables: Vec<toml::Spanned<toml::Table>>,
+    #[serde(skip)]
+    channels: Vec<(channels::Kind, toml::Table)>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,14 +93,6 @@ fn yes() -> bool {
     true
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-enum ChannelConfig {
-    Slack(Slack),
-    Bluebubbles(BlueBubbles),
-    Print(Print),
-}
-
 /// A table as `T`, refusing keys `T` doesn't have. The error names a key, never a value.
 pub fn from_table<T: DeserializeOwned>(table: toml::Table) -> Result<T, String> {
     toml::Value::Table(table)
@@ -117,9 +114,6 @@ impl std::error::Error for ConfigError {}
 
 /// The most a config is read.
 const CONFIG_MAX: u64 = 1024 * 1024;
-
-const WEBHOOK_INLINE: &str = "it holds a Slack webhook URL. Put the URL in a file only root can \
-                              read, and name that file with webhook_file.";
 
 impl Config {
     /// The config at `path`, if it's ours, no one else can write it, and it parses.
@@ -152,23 +146,39 @@ impl Config {
     }
 
     pub fn parse(text: &str) -> Result<Config, ConfigError> {
+        Self::parse_with(text, channels::KINDS)
+    }
+
+    /// [`Config::parse`], with `kinds` the channel kinds a config can name: for tests. Two with
+    /// one name are refused.
+    pub fn parse_with(text: &str, kinds: &[channels::Kind]) -> Result<Config, ConfigError> {
+        let mut by_name = BTreeMap::new();
+        for kind in kinds {
+            if by_name.insert(kind.name, *kind).is_some() {
+                return Err(ConfigError(format!(
+                    "two channel kinds are named {:?}",
+                    kind.name
+                )));
+            }
+        }
+        let secret_urls: Vec<channels::SecretUrl> =
+            kinds.iter().filter_map(|k| k.secret_url).collect();
         // Before parsing, so an error that would quote it never runs. Escapes and line
         // continuations can hide it here; the walk over the parsed values below catches those.
-        if text.to_lowercase().contains("hooks.slack.com") {
-            return Err(ConfigError(WEBHOOK_INLINE.into()));
+        if let Some(url) = secret_urls.iter().find(|u| holds_host(text, u.hosts)) {
+            return Err(ConfigError(url.refusal()));
         }
         let at_line = |e: toml::de::Error| {
-            let line = e
-                .span()
-                .map(|span| text[..span.start.min(text.len())].matches('\n').count() + 1);
+            let line = e.span().map(|span| line_of(text, span.start));
             ConfigError(match line {
                 Some(n) => format!("line {n}: {}", scrub(e.message())),
                 None => scrub(e.message()),
             })
         };
         let table: toml::Table = toml::from_str(text).map_err(at_line)?;
-        if holds_webhook(&toml::Value::Table(table)) {
-            return Err(ConfigError(WEBHOOK_INLINE.into()));
+        let table = toml::Value::Table(table);
+        if let Some(url) = secret_urls.iter().find(|u| holds_url(&table, u.hosts)) {
+            return Err(ConfigError(url.refusal()));
         }
         let mut config: Config = toml::from_str(text).map_err(at_line)?;
         let t = &config.secret_patterns;
@@ -180,23 +190,33 @@ impl Config {
         if config.log_file.as_ref().is_some_and(|p| !p.is_absolute()) {
             return Err(ConfigError("log_file must be an absolute path".into()));
         }
+        let shared = config.shared();
         let mut names = BTreeSet::new();
-        for channel in &config.channels {
+        for spanned in std::mem::take(&mut config.channel_tables) {
+            let line = line_of(text, spanned.span().start);
+            let refused = |why: String| ConfigError(format!("line {line}: {why}"));
+            let mut table = spanned.into_inner();
+            // The kind is never repeated: a secret pasted into the wrong key could be it.
+            let kind = match table.remove("kind") {
+                None => return Err(refused("a channel needs a kind".into())),
+                Some(toml::Value::String(name)) => by_name.get(name.as_str()).copied(),
+                Some(_) => None,
+            };
+            let Some(kind) = kind else {
+                let known: Vec<String> = kinds.iter().map(|k| format!("`{}`", k.name)).collect();
+                return Err(refused(format!(
+                    "a channel's kind is one of {}",
+                    known.join(", ")
+                )));
+            };
+            let channel = (kind.build)(table.clone(), &shared).map_err(refused)?;
             if !names.insert(channel.name().to_string()) {
                 return Err(ConfigError(format!(
                     "two channels are named {:?}",
                     channel.name()
                 )));
             }
-        }
-        if let Some(program) = config.curl.clone() {
-            for channel in &mut config.channels {
-                match channel {
-                    ChannelConfig::Slack(s) => s.curl.program.clone_from(&program),
-                    ChannelConfig::Bluebubbles(b) => b.curl.program.clone_from(&program),
-                    ChannelConfig::Print(_) => {}
-                }
-            }
+            config.channels.push((kind, table));
         }
         Ok(config)
     }
@@ -272,37 +292,45 @@ impl Config {
         &self.secret_patterns_compiled
     }
 
+    /// The configured channels, each built fresh, in the order the config gives them.
     pub fn build_channels(&self) -> Vec<Box<dyn Channel>> {
+        let shared = self.shared();
         self.channels
             .iter()
-            .map(|c| -> Box<dyn Channel> {
-                match c.clone() {
-                    ChannelConfig::Slack(s) => Box::new(s),
-                    ChannelConfig::Bluebubbles(b) => Box::new(b),
-                    ChannelConfig::Print(p) => Box::new(p),
-                }
+            .map(|(kind, table)| {
+                (kind.build)(table.clone(), &shared).expect("a channel that built when parsed")
             })
             .collect()
     }
-}
 
-impl ChannelConfig {
-    fn name(&self) -> &str {
-        match self {
-            ChannelConfig::Slack(s) => &s.name,
-            ChannelConfig::Bluebubbles(b) => &b.name,
-            ChannelConfig::Print(p) => &p.name,
+    fn shared(&self) -> channels::Shared {
+        let mut curl = Curl::default();
+        if let Some(program) = &self.curl {
+            curl.program.clone_from(program);
         }
+        channels::Shared { curl }
     }
 }
 
-/// Whether any key or string in `v`, decoded and in any case, holds a Slack webhook's host.
-fn holds_webhook(v: &toml::Value) -> bool {
-    let hit = |s: &str| s.to_lowercase().contains("hooks.slack.com");
+/// The line of `text` that byte `offset` is on, counting from 1.
+fn line_of(text: &str, offset: usize) -> usize {
+    text[..offset.min(text.len())].matches('\n').count() + 1
+}
+
+/// Whether `s`, in any case, holds any of `hosts`.
+fn holds_host(s: &str, hosts: &[&str]) -> bool {
+    let s = s.to_lowercase();
+    hosts.iter().any(|h| s.contains(&h.to_lowercase()))
+}
+
+/// Whether any key or string in `v`, decoded and in any case, holds any of `hosts`.
+fn holds_url(v: &toml::Value, hosts: &[&str]) -> bool {
     match v {
-        toml::Value::String(s) => hit(s),
-        toml::Value::Array(a) => a.iter().any(holds_webhook),
-        toml::Value::Table(t) => t.iter().any(|(k, v)| hit(k) || holds_webhook(v)),
+        toml::Value::String(s) => holds_host(s, hosts),
+        toml::Value::Array(a) => a.iter().any(|v| holds_url(v, hosts)),
+        toml::Value::Table(t) => t
+            .iter()
+            .any(|(k, v)| holds_host(k, hosts) || holds_url(v, hosts)),
         _ => false,
     }
 }
@@ -333,6 +361,10 @@ mod tests {
     use super::*;
 
     const BASE: &str = "host = \"the test host\"\nstate_dir = \"/var/lib/whimbrel\"\n";
+
+    /// Written out, so the wording of the refusal is held here and not taken from the code.
+    const WEBHOOK_INLINE: &str = "it holds a Slack webhook URL. Put the URL in a file only root \
+                                  can read, and name that file with webhook_file.";
 
     fn parse(extra: &str) -> Result<Config, String> {
         Config::parse(&format!("{BASE}{extra}")).map_err(|e| e.0)
@@ -466,6 +498,17 @@ mod tests {
             let why = parse(extra).unwrap_err();
             assert_eq!(why, WEBHOOK_INLINE, "{extra}");
         }
+    }
+
+    #[test]
+    fn a_channel_with_no_kind_or_a_kind_that_isnt_text_is_refused_by_line() {
+        let why = parse("[[channel]]\nname = \"x\"\n").unwrap_err();
+        assert_eq!(why, "line 3: a channel needs a kind");
+        let why = parse("[[channel]]\nkind = \"print\"\n[[channel]]\nkind = 7\n").unwrap_err();
+        assert_eq!(
+            why,
+            "line 5: a channel's kind is one of `slack`, `bluebubbles`, `print`"
+        );
     }
 
     #[test]

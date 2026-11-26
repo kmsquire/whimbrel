@@ -1,17 +1,5 @@
-//! The channels: Slack by incoming webhook, iMessage through a BlueBubbles server, and print, which
-//! writes to stdout and stands in for every channel in a dry run.
-//!
-//! Each real channel reads its secrets from files at send time, so config holds paths, never the
-//! values, and a rotated secret needs no restart. A secret file must be an absolute path, belong
-//! to us and be readable by us alone. Both send through [`crate::request`], which decides where
-//! each part of a request goes; a channel only says which parts are secret. Nothing a send
-//! returns names the URL, the password, the recipient or a secret file's path: it's logged, and a
-//! path is where a secret pasted into the wrong key would land.
+//! iMessage, through a BlueBubbles server.
 
-use std::fs::OpenOptions;
-use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-use std::path::PathBuf;
 use std::process::id;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,86 +7,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use regex::Regex;
 use serde::Deserialize;
 
+use super::{Kind, SecretFile, SendsWithCurl, build_with_curl};
 use crate::alert::Alert;
 use crate::ledger::{Channel, Form};
-use crate::request::{Body, Part, Request};
+use crate::request::{Body, Curl, Part, Request};
 
-pub use crate::request::Curl;
-
-/// A file holding a secret: an absolute path, so it can't depend on where whimbrel was started.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(try_from = "PathBuf")]
-pub struct SecretFile(PathBuf);
-
-impl TryFrom<PathBuf> for SecretFile {
-    type Error = String;
-
-    fn try_from(path: PathBuf) -> Result<Self, String> {
-        // The path itself isn't repeated: a secret pasted here by mistake would be.
-        if path.is_absolute() {
-            Ok(SecretFile(path))
-        } else {
-            Err("a secret file must be an absolute path".into())
-        }
-    }
-}
-
-/// The most a secret file is read: every secret here is one short line.
-const SECRET_MAX: u64 = 64 * 1024;
-
-impl SecretFile {
-    pub fn new(path: impl Into<PathBuf>) -> Result<Self, String> {
-        Self::try_from(path.into())
-    }
-
-    /// The file's name alone, for messages.
-    fn name(&self) -> String {
-        self.0
-            .file_name()
-            .map_or_else(|| "?".into(), |n| n.to_string_lossy().into_owned())
-    }
-
-    /// Its first line, trimmed, if it's a regular file of ours that only we can read. The
-    /// failure names the file, never its path or contents.
-    ///
-    /// The checks are on the open file, so a swap after them can't slip a different file in. A
-    /// directory above it that someone else can write is still a way in; keep secrets under a
-    /// directory only root can change.
-    fn read(&self, what: &str) -> Result<String, String> {
-        let name = self.name();
-        let mut f = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&self.0)
-            .map_err(|e| format!("can't read the {what} file {name} ({})", e.kind()))?;
-        let m = f
-            .metadata()
-            .map_err(|e| format!("can't read the {what} file {name} ({})", e.kind()))?;
-        if !m.is_file() {
-            return Err(format!("the {what} file {name} isn't a regular file"));
-        }
-        // SAFETY: geteuid has no preconditions and can't fail.
-        if m.uid() != unsafe { libc::geteuid() } {
-            return Err(format!("the {what} file {name} belongs to another account"));
-        }
-        if m.mode() & 0o077 != 0 {
-            return Err(format!(
-                "the {what} file {name} can be read by other accounts ({:o}); it should be 600",
-                m.mode() & 0o777
-            ));
-        }
-        let mut text = String::new();
-        (&mut f)
-            .take(SECRET_MAX)
-            .read_to_string(&mut text)
-            .map_err(|e| format!("can't read the {what} file {name} ({})", e.kind()))?;
-        let line = text.lines().next().unwrap_or("").trim().to_string();
-        if line.is_empty() {
-            return Err(format!("the {what} file {name} is empty"));
-        }
-        Ok(line)
-    }
-}
+/// ```toml
+/// [[channel]]
+/// kind = "bluebubbles"
+/// server = "http://127.0.0.1:1234"
+/// password_file = "/etc/whimbrel/bluebubbles-password"
+/// recipient_file = "/etc/whimbrel/imessage-recipient"
+/// ```
+pub const KIND: Kind = Kind {
+    name: "bluebubbles",
+    // Its URL is the server's address, which isn't secret, and `Server` refuses one with a path,
+    // a query or credentials in it.
+    secret_url: None,
+    build: build_with_curl::<BlueBubbles>,
+};
 
 /// A BlueBubbles server's address: `http://` or `https://`, a host and an optional port, and
 /// nothing else, so no path, query or credentials ride along with the password.
@@ -133,77 +60,6 @@ impl TryFrom<String> for Server {
 impl Server {
     pub fn new(s: impl Into<String>) -> Result<Self, String> {
         Self::try_from(s.into())
-    }
-}
-
-/// Slack, by incoming webhook. It gets the full form.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Slack {
-    #[serde(default = "slack")]
-    pub name: String,
-    pub webhook_file: SecretFile,
-    #[serde(skip)]
-    pub curl: Curl,
-}
-
-fn slack() -> String {
-    "slack".into()
-}
-
-impl Slack {
-    pub fn new(webhook_file: SecretFile) -> Self {
-        Slack {
-            name: slack(),
-            webhook_file,
-            curl: Curl::default(),
-        }
-    }
-
-    /// The webhook from its file, checked.
-    fn webhook(&self) -> Result<String, String> {
-        let url = self.webhook_file.read("Slack webhook")?;
-        if !valid_slack_webhook(&url) {
-            return Err(format!(
-                "the Slack webhook file {} doesn't hold a Slack incoming-webhook URL",
-                self.webhook_file.name()
-            ));
-        }
-        Ok(url)
-    }
-}
-
-/// `https://hooks.slack.com/services/` and the path's own characters, nothing else.
-fn valid_slack_webhook(url: &str) -> bool {
-    url.strip_prefix("https://hooks.slack.com/services/")
-        .is_some_and(|rest| {
-            !rest.is_empty()
-                && rest
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-'))
-        })
-}
-
-/// Slack reads `<...>` as a link or a mention, so a log named `<!channel>.log` would ping.
-fn slack_escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-impl Channel for Slack {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn send(&mut self, alert: &Alert) -> Result<(), String> {
-        let url = self.webhook()?;
-        let body = serde_json::json!({ "text": slack_escape(&alert.full) });
-        Request::post("Slack", [Part::secret(url)], Body::Json(body)).send(&self.curl)
-    }
-
-    fn ready(&self) -> Result<(), String> {
-        self.webhook().map(|_| ())
     }
 }
 
@@ -275,6 +131,12 @@ fn valid_recipient(to: &str) -> bool {
     PHONE.is_match(to) || (EMAIL.is_match(to) && !to.contains(".."))
 }
 
+impl SendsWithCurl for BlueBubbles {
+    fn curl_mut(&mut self) -> &mut Curl {
+        &mut self.curl
+    }
+}
+
 impl Channel for BlueBubbles {
     fn name(&self) -> &str {
         &self.name
@@ -307,80 +169,9 @@ impl Channel for BlueBubbles {
     }
 }
 
-/// Writes to stdout and always succeeds. A config can use it to try a host's checks out; a dry
-/// run puts one in place of each real channel, with its name and form and a heading.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Print {
-    #[serde(default = "print")]
-    pub name: String,
-    #[serde(skip)]
-    pub form: Form,
-    /// Printed above each message: "slack would be sent".
-    #[serde(skip)]
-    pub heading: Option<String>,
-}
-
-fn print() -> String {
-    "print".into()
-}
-
-impl Print {
-    /// The dry run's stand-in for `channel`.
-    pub fn instead_of(channel: &dyn Channel) -> Self {
-        Print {
-            name: channel.name().to_string(),
-            form: channel.form(),
-            heading: Some(format!("{} would be sent", channel.name())),
-        }
-    }
-}
-
-impl Channel for Print {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn form(&self) -> Form {
-        self.form
-    }
-
-    fn send(&mut self, alert: &Alert) -> Result<(), String> {
-        let text = match self.form {
-            Form::Short => &alert.short,
-            Form::Full => &alert.full,
-        };
-        match &self.heading {
-            Some(h) => println!("\n{h}:\n{text}"),
-            None => println!("{text}"),
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_a_slack_incoming_webhook_is_a_webhook() {
-        assert!(valid_slack_webhook(
-            "https://hooks.slack.com/services/T0/B0/abc_-9"
-        ));
-        assert!(!valid_slack_webhook("https://hooks.slack.com/services/"));
-        assert!(!valid_slack_webhook(
-            "http://hooks.slack.com/services/T0/B0/x"
-        ));
-        assert!(!valid_slack_webhook(
-            "https://hooks.slack.com.evil/services/T0"
-        ));
-        assert!(!valid_slack_webhook(
-            "https://hooks.slack.com/services/T0?x=1"
-        ));
-        assert!(!valid_slack_webhook(
-            "https://hooks.slack.com/services/T0\"\nurl=x"
-        ));
-    }
 
     #[test]
     fn a_number_is_e164_from_8_to_15_digits() {
@@ -490,20 +281,5 @@ mod tests {
         assert!(Server::new(with_password).is_err());
         assert!(Server::new("ftp://host").is_err());
         assert!(Server::new("http://").is_err());
-    }
-
-    #[test]
-    fn a_secret_file_is_an_absolute_path() {
-        assert!(SecretFile::new("/etc/whimbrel/webhook").is_ok());
-        let why = SecretFile::new("https://hooks.example/sekrit").unwrap_err();
-        assert!(!why.contains("sekrit"), "{why}");
-    }
-
-    #[test]
-    fn slack_markup_is_escaped() {
-        assert_eq!(
-            slack_escape("<!channel> & <x>"),
-            "&lt;!channel&gt; &amp; &lt;x&gt;"
-        );
     }
 }

@@ -6,7 +6,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::Duration;
 
-use whimbrel::channels::{BlueBubbles, SecretFile, Server, Slack};
+use whimbrel::channels::{self, BlueBubbles, SecretFile, Server, Slack};
+use whimbrel::config::Config;
 use whimbrel::{Alert, Channel, Form};
 
 mod common;
@@ -86,19 +87,56 @@ fn the_webhook_never_reaches_curls_argv() {
     assert_eq!(stub.args(), ARGV);
 }
 
-/// Each channel's secrets, written out, and the channel to send them with.
-fn every_channel(stub: &Stub) -> Vec<(Box<dyn Channel>, &'static [&'static str])> {
-    vec![
-        (Box::new(slack(stub)), &[WEBHOOK]),
-        (Box::new(bluebubbles(stub)), &[PASSWORD, TO]),
-    ]
+/// How a registered channel kind sends, for the argv test.
+enum Sends {
+    /// With curl: the rest of its `[[channel]]` table, and its secrets, written out.
+    Curl(String, &'static [&'static str]),
+    /// Without: it never runs curl.
+    Nothing,
+}
+
+/// Each registered kind's table, with its secret files written into `stub`'s directory. A kind
+/// with no entry here fails the test, so a new kind can't skip it.
+fn sends(kind: &str, stub: &Stub) -> Sends {
+    let file = |name: &str, value: &str| {
+        stub.secret(name, value);
+        format!("{:?}", stub.dir.path().join(name))
+    };
+    match kind {
+        "slack" => Sends::Curl(
+            format!("webhook_file = {}\n", file("webhook", WEBHOOK)),
+            &[WEBHOOK],
+        ),
+        "bluebubbles" => Sends::Curl(
+            format!(
+                "server = \"http://127.0.0.1:1234\"\npassword_file = {}\nrecipient_file = {}\n",
+                file("password", PASSWORD),
+                file("recipient", TO)
+            ),
+            &[PASSWORD, TO],
+        ),
+        "print" => Sends::Nothing,
+        other => panic!("say how the {other} channel sends, so its secrets are checked"),
+    }
 }
 
 #[test]
 fn no_channel_puts_a_secret_on_curls_argv() {
-    let stub = Stub::new();
-    for (mut channel, secrets) in every_channel(&stub) {
+    let mut checked = 0;
+    for kind in channels::KINDS {
+        let stub = Stub::new();
+        let Sends::Curl(table, secrets) = sends(kind.name, &stub) else {
+            continue;
+        };
+        let config = Config::parse(&format!(
+            "host = \"h\"\nstate_dir = \"/s\"\ncurl = {:?}\n[[channel]]\nkind = {:?}\n{table}",
+            stub.curl().program,
+            kind.name
+        ))
+        .unwrap();
+        let mut channel = config.build_channels().pop().unwrap();
         channel.send(&alert()).unwrap();
+        checked += 1;
         for secret in secrets {
             assert!(
                 stub.stdin().contains(secret),
@@ -113,6 +151,8 @@ fn no_channel_puts_a_secret_on_curls_argv() {
             );
         }
     }
+    // Slack and BlueBubbles at least: a registry that lost them would otherwise pass.
+    assert!(checked >= 2, "{checked}");
 }
 
 #[test]
