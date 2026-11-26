@@ -317,6 +317,12 @@ Each run writes one line to the log. The log is stdout unless you set `log_file`
 When a send fails, the log line contains `alert failed` and the reason. To monitor whimbrel
 itself, search the log for that text.
 
+A run that finds another run holding the lock does nothing, and logs that it skipped:
+
+```text
+2026-11-24T10:00:00Z skipped: another run holds /var/lib/whimbrel/lock
+```
+
 ## Stability
 
 The stable interface is the command line, the config file format, and the result-row format. The
