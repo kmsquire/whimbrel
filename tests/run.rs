@@ -196,7 +196,7 @@ fn a_run_sends_what_changed_keeps_the_ledger_and_logs_one_line() {
     );
     assert!(h.state().join("ledger.json").exists());
     assert_eq!(
-        report.log_line().unwrap(),
+        report.log_line(None).unwrap(),
         format!("{AT} WARN disk=WARN alerting=OK; print: sent")
     );
 }
@@ -222,7 +222,7 @@ fn a_second_run_with_nothing_new_sends_nothing() {
     let (report, sent) = h.run(Mode::Run);
     assert_eq!(sent, Vec::<String>::new());
     assert_eq!(
-        report.log_line().unwrap(),
+        report.log_line(None).unwrap(),
         format!("{AT} WARN disk=WARN alerting=OK; print: no change")
     );
 }
@@ -249,7 +249,7 @@ fn a_state_directory_others_can_write_is_refused_and_logged() {
         assert_eq!(report.complaint(), Some(why.clone()));
         // What a health check that greps the log for "alert failed" sees.
         assert_eq!(
-            report.log_line().unwrap(),
+            report.log_line(None).unwrap(),
             format!("{AT} alert failed: couldn't start: {why}")
         );
     }
@@ -335,7 +335,7 @@ fn a_dry_run_says_what_each_channel_would_be_sent_and_changes_nothing() {
         "a dry run sent through the channel"
     );
     assert!(!h.state().exists(), "a dry run made the state directory");
-    assert_eq!(report.log_line(), None);
+    assert_eq!(report.log_line(None), None);
 }
 
 #[test]
@@ -379,7 +379,7 @@ fn a_failed_send_is_logged_as_alert_failed_and_the_run_still_succeeds() {
     let (report, _) = h.run(Mode::Run);
     assert_eq!(report.exit(), Exit::Ran);
     assert_eq!(
-        report.log_line().unwrap(),
+        report.log_line(None).unwrap(),
         format!(
             "{AT} WARN disk=WARN alerting=WARN; print: sent; \
              slack: alert failed: can't read the Slack webhook file no-such-webhook (entity not found)"
@@ -408,7 +408,7 @@ fn a_channel_that_cant_send_is_reported_through_the_others() {
         whimbrel::sentence::breaks("alerting", &sentence),
         Vec::<String>::new()
     );
-    let line = report.log_line().unwrap();
+    let line = report.log_line(None).unwrap();
     assert!(
         line.starts_with(&format!(
             "{AT} WARN disk=OK alerting=WARN; print: sent; slack: alert failed"
@@ -487,7 +487,7 @@ fn a_held_lock_stops_a_second_run_and_logs_that_it_was_skipped() {
         Some(format!("another run holds {}/lock", h.state().display()))
     );
     assert_eq!(
-        report.log_line().unwrap(),
+        report.log_line(None).unwrap(),
         format!(
             "{AT} skipped: another run holds {}/lock",
             h.state().display()
@@ -521,7 +521,7 @@ fn an_unreadable_ledger_is_set_aside_and_every_channel_is_told() {
         "{ not json"
     );
     assert_eq!(
-        report.log_line().unwrap(),
+        report.log_line(None).unwrap(),
         format!(
             "{AT} FAIL disk=FAIL alerting=OK; print: sent; ledger lost: set aside an unreadable \
              ledger as {}, and every channel is told",
@@ -541,7 +541,7 @@ fn a_dry_run_leaves_an_unreadable_ledger_where_it_is() {
         fs::read_to_string(h.state().join("ledger.json")).unwrap(),
         "{ not json"
     );
-    assert_eq!(report.log_line(), None, "a dry run would write the log");
+    assert_eq!(report.log_line(None), None, "a dry run would write the log");
 }
 
 #[test]

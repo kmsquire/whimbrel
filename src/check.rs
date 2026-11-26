@@ -22,13 +22,19 @@ pub enum Level {
     Fail,
 }
 
-impl std::fmt::Display for Level {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl Level {
+    pub fn as_str(self) -> &'static str {
+        match self {
             Level::Ok => "OK",
             Level::Warn => "WARN",
             Level::Fail => "FAIL",
-        })
+        }
+    }
+}
+
+impl std::fmt::Display for Level {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

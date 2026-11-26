@@ -16,6 +16,7 @@ pub mod channels;
 mod check;
 pub mod checks;
 pub mod config;
+pub mod heartbeat;
 mod ledger;
 pub mod process;
 pub mod request;

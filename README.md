@@ -315,7 +315,7 @@ Each run writes one line to the log. The log is stdout unless you set `log_file`
 ```
 
 When a send fails, the log line contains `alert failed` and the reason. To monitor whimbrel
-itself, search the log for that text.
+itself, search the log for that text, or set up a [heartbeat](docs/config.md#heartbeat).
 
 A run that finds another run holding the lock does nothing, and logs that it skipped:
 
