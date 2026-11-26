@@ -164,7 +164,7 @@ fn a_run_that_cant_start_logs_alert_failed_couldnt_start() {
 }
 
 #[test]
-fn a_run_locked_out_by_another_says_so_on_stderr_and_exits_0() {
+fn a_run_locked_out_by_another_says_so_on_stderr_exits_0_and_logs_that_it_was_skipped() {
     let h = Host::new(92);
     fs::create_dir(h.state()).unwrap();
     fs::set_permissions(h.state(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -178,9 +178,11 @@ fn a_run_locked_out_by_another_says_so_on_stderr_and_exits_0() {
         format!("whimbrel: another run holds {}/lock\n", path(&h.state()))
     );
     assert_eq!(
-        h.lines(),
-        Vec::<String>::new(),
-        "a locked-out run logs nothing"
+        only_line(&h),
+        format!(
+            "skipped: another run holds {}",
+            path(&h.state().join("lock"))
+        )
     );
 }
 

@@ -471,7 +471,7 @@ fn a_config_whose_checks_are_refused_leaves_no_state() {
 }
 
 #[test]
-fn a_held_lock_stops_a_second_run_quietly() {
+fn a_held_lock_stops_a_second_run_and_logs_that_it_was_skipped() {
     let h = Host::new();
     fs::create_dir(h.state()).unwrap();
     fs::set_permissions(h.state(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -486,7 +486,13 @@ fn a_held_lock_stops_a_second_run_quietly() {
         report.complaint(),
         Some(format!("another run holds {}/lock", h.state().display()))
     );
-    assert_eq!(report.log_line(), None);
+    assert_eq!(
+        report.log_line().unwrap(),
+        format!(
+            "{AT} skipped: another run holds {}/lock",
+            h.state().display()
+        )
+    );
 }
 
 #[test]

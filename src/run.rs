@@ -104,7 +104,12 @@ impl Report {
                 "{} alert failed: couldn't start: {why}",
                 utc(self.now)
             )),
-            Ended::LockedOut(_) => None,
+            // Nothing a watcher greps for a failure: the run that holds the lock logs its own.
+            Ended::LockedOut(lock) => Some(format!(
+                "{} skipped: another run holds {}",
+                utc(self.now),
+                lock.display()
+            )),
             Ended::Ran(ran) => Some(log_line(
                 self.now,
                 &ran.results,
