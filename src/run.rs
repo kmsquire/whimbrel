@@ -1,5 +1,6 @@
 //! One run, from a config: check, tell each channel what's new, keep the ledger. [`run`] returns
-//! a [`Report`], and the log line, a dry run's printout and stderr are each rendered from it.
+//! a [`Report`], and the log line, a dry run's printout, stderr and the heartbeat are each
+//! rendered from it.
 
 use std::fmt::Write as _;
 use std::fs::{self, DirBuilder, OpenOptions};
@@ -41,8 +42,8 @@ impl From<Exit> for std::process::ExitCode {
     }
 }
 
-/// What one run did: the one value that the log line, a dry run's printout and the messages on
-/// stderr are rendered from.
+/// What one run did: the one value that the log line, a dry run's printout, the messages on
+/// stderr and the heartbeat are rendered from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Report {
     pub mode: Mode,
@@ -73,6 +74,13 @@ pub struct Ran {
     pub save_failed: bool,
 }
 
+impl Ran {
+    /// The worst level any check found: OK with no checks.
+    pub fn worst(&self) -> Level {
+        worst(&self.results)
+    }
+}
+
 /// What one channel did this run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelReport {
@@ -94,29 +102,34 @@ impl Report {
     }
 
     /// The run's one line for the log, if it writes one: a dry run changes nothing, the log
-    /// included. "alert failed" is what other tools grep the log for.
-    pub fn log_line(&self) -> Option<String> {
+    /// included. "alert failed" is what other tools grep the log for. `heartbeat_failed` is why
+    /// the ping after the run failed, if it did: it's sent once the report is made, so it isn't
+    /// part of it.
+    pub fn log_line(&self, heartbeat_failed: Option<&str>) -> Option<String> {
         if self.mode == Mode::DryRun {
             return None;
         }
-        match &self.ended {
-            Ended::NotStarted(why) => Some(format!(
-                "{} alert failed: couldn't start: {why}",
-                utc(self.now)
-            )),
+        let mut line = match &self.ended {
+            Ended::NotStarted(why) => {
+                format!("{} alert failed: couldn't start: {why}", utc(self.now))
+            }
             // Nothing a watcher greps for a failure: the run that holds the lock logs its own.
-            Ended::LockedOut(lock) => Some(format!(
+            Ended::LockedOut(lock) => format!(
                 "{} skipped: another run holds {}",
                 utc(self.now),
                 lock.display()
-            )),
-            Ended::Ran(ran) => Some(log_line(
+            ),
+            Ended::Ran(ran) => log_line(
                 self.now,
                 &ran.results,
                 ran.channels.iter().map(|t| (t.name.as_str(), &t.outcome)),
                 &ran.notes,
-            )),
+            ),
+        };
+        if let Some(why) = heartbeat_failed {
+            let _ = write!(line, "; heartbeat failed: {why}");
         }
+        Some(line)
     }
 
     /// What a dry run prints: the levels, then what each channel would be sent, then each
@@ -174,13 +187,26 @@ pub(crate) fn once(
         now,
         &mut refs,
         |report| {
+            // After the channels, so a ping that fails or hangs can't keep an alert from going
+            // out, and never in a dry run, which sends nothing. Only a run that went through and
+            // kept its ledger pings: one that couldn't start, was locked out or lost its ledger
+            // stays silent, and the silence is what the service watching for pings acts on.
+            let heartbeat_failed = match (&config.heartbeat, &report.ended) {
+                (Some(heartbeat), Ended::Ran(ran)) if mode == Mode::Run && !ran.save_failed => {
+                    heartbeat
+                        .ping(&config.shared().curl, ran)
+                        .err()
+                        .map(|why| config.secret_patterns().redact(&why))
+                }
+                _ => None,
+            };
             if let Some(why) = report.complaint() {
                 eprintln!("{program}: {why}");
             }
             if mode == Mode::DryRun {
                 print!("{}", report.printout());
             }
-            if let Some(line) = report.log_line()
+            if let Some(line) = report.log_line(heartbeat_failed.as_deref())
                 && let Err(e) = log(config.log_file.as_deref(), &line)
             {
                 // A run that couldn't start has said why on stderr already.
@@ -522,7 +548,7 @@ mod tests {
             report.printout(),
             "OK disk=OK\n\nb would be sent:\nto b\n\na: no change since it was last told.\n"
         );
-        assert_eq!(report.log_line(), None);
+        assert_eq!(report.log_line(None), None);
     }
 
     #[test]

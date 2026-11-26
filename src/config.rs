@@ -37,6 +37,7 @@ use crate::channels::{self, Curl};
 use crate::check::{Configured, Kind, Shared};
 use crate::checks::KINDS;
 use crate::checks::alerting::{self, Alerting};
+use crate::heartbeat::{self, Heartbeat};
 use crate::ledger::Channel;
 use crate::secret_patterns::SecretPatterns;
 
@@ -66,6 +67,8 @@ pub struct Config {
     channel_tables: Vec<toml::Spanned<toml::Table>>,
     #[serde(skip)]
     channels: Vec<(channels::Kind, toml::Table)>,
+    /// Pinged after every run that went through and kept its ledger, if set.
+    pub heartbeat: Option<Heartbeat>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,6 +181,13 @@ impl Config {
         let table: toml::Table = toml::from_str(text).map_err(at_line)?;
         let table = toml::Value::Table(table);
         if let Some(url) = secret_urls.iter().find(|u| holds_url(&table, u.hosts)) {
+            return Err(ConfigError(url.refusal()));
+        }
+        let url = heartbeat::SECRET_URL;
+        if table
+            .get("heartbeat")
+            .is_some_and(|h| holds_url(h, url.hosts))
+        {
             return Err(ConfigError(url.refusal()));
         }
         let mut config: Config = toml::from_str(text).map_err(at_line)?;
@@ -303,7 +313,8 @@ impl Config {
             .collect()
     }
 
-    fn shared(&self) -> channels::Shared {
+    /// What every channel, and the heartbeat, is built with: curl.
+    pub(crate) fn shared(&self) -> channels::Shared {
         let mut curl = Curl::default();
         if let Some(program) = &self.curl {
             curl.program.clone_from(program);

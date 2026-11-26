@@ -31,6 +31,7 @@ wrong place. Where this page says that a path must be absolute, whimbrel refuses
 - [Result rows](#result-rows)
 - [Channels](#channels): [`slack`](#slack), [`bluebubbles`](#bluebubbles), [`print`](#print)
 - [The alerting check](#the-alerting-check)
+- [Heartbeat](#heartbeat)
 - [Sentences](#sentences)
 
 ## Top level
@@ -44,6 +45,7 @@ wrong place. Where this page says that a path must be absolute, whimbrel refuses
 | `[secret_patterns]` | table | built-ins on | What a secret looks like on this host. See [Secret patterns](#secret-patterns). |
 | `[[check]]` | array of tables | none | The checks, in the order in which whimbrel runs them and alerts list them. |
 | `[[channel]]` | array of tables | none | Where alerts go. With no channels, `run` checks and logs but sends no alerts. |
+| `[heartbeat]` | table | none | A URL to ping after every run that completes. See [Heartbeat](#heartbeat). |
 
 whimbrel refuses a config file that contains a Slack webhook URL anywhere. Put the URL in a
 separate file, and name that file in the config file.
@@ -864,6 +866,39 @@ When you configure any channel, whimbrel adds a check with the key `alerting`. T
 when a channel can't send, for example when the channel's secret file is missing or unreadable.
 The other channels then report the problem. whimbrel performs this check without sending
 anything.
+
+## Heartbeat
+
+A heartbeat is a ping that whimbrel sends after every `run` that completes, so a service that
+watches for pings, a dead man's switch, can tell you when whimbrel stops running. Channels speak
+only when something changes, so without one a host that stops running whimbrel is silent.
+
+| Key | Type | Description |
+|---|---|---|
+| `url_file` | secret file | A file that contains the `https://` or `http://` URL to ping and nothing else. |
+
+```toml
+[heartbeat]
+url_file = "/etc/whimbrel/heartbeat-url"
+```
+
+The ping is a `POST` with a JSON body that holds the worst level that the checks found (`OK`,
+`WARN`, or `FAIL`) and nothing else:
+
+```json
+{"status": "WARN"}
+```
+
+The body never contains an alert's text. whimbrel doesn't ping when a run couldn't start, when
+another run held the lock, or when it couldn't save its state: the missing
+ping is what makes the service tell you. A dry run doesn't ping either.
+
+whimbrel pings after it has told the channels, and a ping that fails doesn't change the exit
+status. The run's log line ends with `heartbeat failed:` and the reason. The URL is a secret,
+because anyone who has it can ping, so whimbrel treats it the way it treats a webhook: it reads
+the URL from the file at each run, passes it to `curl` on stdin, and refuses a config file whose
+`[heartbeat]` table contains a URL. Use an `https://` URL: with `http://`, the URL, and the token
+in it, crosses the network in clear text, where anyone on the way can read it and ping.
 
 ## Sentences
 
