@@ -1,5 +1,6 @@
 //! The docs against the code: what a reader copies from them works.
 
+use whimbrel::channels;
 use whimbrel::checks::KINDS;
 use whimbrel::config::Config;
 use whimbrel::secret_patterns::BUILTINS;
@@ -30,8 +31,9 @@ fn the_reference_lists_every_builtin_pattern_in_order() {
 }
 
 #[test]
-fn every_check_example_in_the_docs_builds() {
+fn every_check_and_channel_example_in_the_docs_builds() {
     let mut seen = Vec::new();
+    let mut channel_names = Vec::new();
     for block in blocks(CONFIG_MD, "toml")
         .into_iter()
         .chain(blocks(README, "toml"))
@@ -47,6 +49,7 @@ fn every_check_example_in_the_docs_builds() {
             .build_checks()
             .unwrap_or_else(|e| panic!("{e}\n{text}"));
         seen.extend(checks.iter().map(|c| c.key.clone()));
+        channel_names.extend(config.build_channels().iter().map(|c| c.name().to_string()));
     }
     // Each kind has an example, under its own key or the one the example gives it.
     for kind in KINDS {
@@ -57,4 +60,41 @@ fn every_check_example_in_the_docs_builds() {
         );
     }
     assert!(!seen.is_empty());
+    // And each channel kind, which built above under its default name.
+    for kind in channels::KINDS {
+        assert!(
+            CONFIG_MD.contains(&format!("[[channel]]\nkind = \"{}\"\n", kind.name)),
+            "no example of the {} channel",
+            kind.name
+        );
+        assert!(
+            channel_names.iter().any(|n| n == kind.name),
+            "no example of the {} channel built",
+            kind.name
+        );
+    }
+}
+
+#[test]
+fn both_lists_of_channel_kinds_in_the_reference_name_every_kind() {
+    let contents = CONFIG_MD
+        .lines()
+        .find(|l| l.starts_with("- [Channels](#channels):"))
+        .expect("the contents' line for channels");
+    let table = CONFIG_MD
+        .lines()
+        .skip_while(|l| *l != "## Channels")
+        .find(|l| l.starts_with("| `kind` | string | required |"))
+        .expect("the kind row of the channels table");
+    for kind in channels::KINDS {
+        let name = kind.name;
+        assert!(
+            contents.contains(&format!("[`{name}`](#{name})")),
+            "the contents don't list {name}: {contents}"
+        );
+        assert!(
+            table.contains(&format!("`{name}`")),
+            "the kind row doesn't list {name}: {table}"
+        );
+    }
 }

@@ -816,6 +816,12 @@ problem, followed by each check's details, such as the largest folders on a full
 |---|---|---|
 | `webhook_file` | secret file | A file that contains a `https://hooks.slack.com/services/...` URL and nothing else. |
 
+```toml
+[[channel]]
+kind = "slack"
+webhook_file = "/etc/whimbrel/slack-webhook"
+```
+
 whimbrel escapes `<`, `>`, and `&` in an alert, so a name from the host can't become a mention.
 
 ### `bluebubbles`
@@ -830,6 +836,14 @@ without details.
 | `password_file` | secret file | The server's password. The password can contain only letters and digits, because whimbrel sends it in the query string. |
 | `recipient_file` | secret file | A phone number in international form, such as `+15555550100`, or an Apple ID email address. whimbrel doesn't accept a chat GUID, so an alert can't go to a group chat. |
 
+```toml
+[[channel]]
+kind = "bluebubbles"
+server = "http://127.0.0.1:1234"
+password_file = "/etc/whimbrel/bluebubbles-password"
+recipient_file = "/etc/whimbrel/imessage-recipient"
+```
+
 The request never goes through a proxy, regardless of the environment's proxy settings, because
 the password is in the URL.
 
@@ -837,6 +851,11 @@ the password is in the URL.
 
 The `print` channel writes each alert to stdout. Use it to try out a config file. In a dry run,
 whimbrel replaces every real channel with a `print` channel that has the same name and form.
+
+```toml
+[[channel]]
+kind = "print"
+```
 
 ## The alerting check
 
