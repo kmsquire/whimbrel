@@ -4,9 +4,10 @@
 //! the README and `docs/config.md`. The items here are public only so the crate's own integration
 //! tests reach them: they aren't a library API, and any release may change them.
 //!
-//! A run builds the configured checks (`checks`), runs them, and tells each channel (`channels`)
-//! what changed since it was last told. The ledger behind that is [`deliver`], and [`StateDir`]
-//! keeps it on disk.
+//! A run ([`run::run`]) builds the configured checks (`checks`), runs them, and tells each
+//! channel (`channels`) what changed since it was last told. The ledger behind that is
+//! [`deliver`], and [`StateDir`] keeps it on disk. The run returns a [`run::Report`], and the log
+//! line and a dry run's printout are each rendered from it.
 
 use std::process::ExitCode;
 
