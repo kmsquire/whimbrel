@@ -17,6 +17,7 @@ pub mod checks;
 pub mod config;
 mod ledger;
 pub mod process;
+pub mod request;
 pub mod rows;
 pub mod run;
 pub mod secret_patterns;

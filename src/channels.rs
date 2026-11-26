@@ -3,10 +3,10 @@
 //!
 //! Each real channel reads its secrets from files at send time, so config holds paths, never the
 //! values, and a rotated secret needs no restart. A secret file must be an absolute path, belong
-//! to us and be readable by us alone. Both send with `curl`, handing it the URL and the body on
-//! stdin as a curl config, so neither appears in a process listing. Nothing a send returns names
-//! the URL, the password, the recipient or a secret file's path: it's logged, and a path is where
-//! a secret pasted into the wrong key would land.
+//! to us and be readable by us alone. Both send through [`crate::request`], which decides where
+//! each part of a request goes; a channel only says which parts are secret. Nothing a send
+//! returns names the URL, the password, the recipient or a secret file's path: it's logged, and a
+//! path is where a secret pasted into the wrong key would land.
 
 use std::fs::OpenOptions;
 use std::io::Read;
@@ -14,119 +14,16 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::PathBuf;
 use std::process::id;
 use std::sync::LazyLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
 use serde::Deserialize;
 
 use crate::alert::Alert;
 use crate::ledger::{Channel, Form};
-use crate::process::{self, Unfinished};
+use crate::request::{Body, Part, Request};
 
-/// How to reach `curl`, and how long to give it.
-#[derive(Clone, Debug)]
-pub struct Curl {
-    pub program: PathBuf,
-    pub timeout: Duration,
-}
-
-impl Default for Curl {
-    fn default() -> Self {
-        Curl {
-            program: "curl".into(),
-            timeout: Duration::from_secs(20),
-        }
-    }
-}
-
-impl Curl {
-    /// POST `body` as JSON to `url`, with `extra` arguments. `service` names the far end in a
-    /// failure.
-    fn post(
-        &self,
-        service: &str,
-        url: &str,
-        body: &serde_json::Value,
-        extra: &[&str],
-    ) -> Result<(), String> {
-        let config = format!(
-            "url = {}\ndata-binary = {}\n",
-            quoted(url),
-            quoted(&body.to_string())
-        );
-        let secs = self.timeout.as_secs().max(1).to_string();
-        // -q first: a ~/.curlrc could otherwise turn on tracing that writes the URL to a file.
-        let mut args = vec![
-            "-q",
-            "-sS",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
-            "--max-time",
-            &secs,
-            "-H",
-            "Content-Type: application/json",
-        ];
-        args.extend_from_slice(extra);
-        args.extend_from_slice(&["-K", "-"]);
-        // A second more than curl's own limit, so curl's timeout is the one that's reported.
-        let finished = process::run(
-            &self.program,
-            &args,
-            config.as_bytes(),
-            self.timeout + Duration::from_secs(1),
-        );
-        let out = match finished {
-            Ok(out) => out,
-            Err(
-                Unfinished::NotStarted
-                | Unfinished::Unread
-                | Unfinished::TooMuch
-                | Unfinished::HeldOpen,
-            ) => {
-                return Err("couldn't run curl".into());
-            }
-            Err(Unfinished::TimedOut) => {
-                return Err(format!("nothing from {service} within {secs} s"));
-            }
-        };
-        let code = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if code == "200" {
-            return Ok(());
-        }
-        Err(match (code.as_str(), out.status.code()) {
-            ("000" | "", Some(28)) => format!("nothing from {service} within {secs} s"),
-            ("000" | "", Some(6)) => format!("couldn't resolve {service}'s host"),
-            ("000" | "", Some(7)) => format!("couldn't connect to {service}"),
-            ("000" | "", Some(rc)) => format!("no HTTP reply from {service} (curl exit {rc})"),
-            ("000" | "", None) => format!("no HTTP reply from {service} (curl killed)"),
-            (code, _) if code.len() == 3 && code.bytes().all(|b| b.is_ascii_digit()) => {
-                format!("{service} said HTTP {code}")
-            }
-            _ => format!("no HTTP reply from {service}"),
-        })
-    }
-}
-
-/// A string as a curl config file quotes it: backslash and double quote escaped, and no raw line
-/// breaks, which JSON's own escaping already guarantees for a body.
-fn quoted(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
+pub use crate::request::Curl;
 
 /// A file holding a secret: an absolute path, so it can't depend on where whimbrel was started.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -302,7 +199,7 @@ impl Channel for Slack {
     fn send(&mut self, alert: &Alert) -> Result<(), String> {
         let url = self.webhook()?;
         let body = serde_json::json!({ "text": slack_escape(&alert.full) });
-        self.curl.post("Slack", &url, &body, &[])
+        Request::post("Slack", [Part::secret(url)], Body::Json(body)).send(&self.curl)
     }
 
     fn ready(&self) -> Result<(), String> {
@@ -340,8 +237,9 @@ impl BlueBubbles {
         }
     }
 
-    /// The endpoint, with the password in its query, and the recipient, from their files, checked.
-    fn target(&self) -> Result<(String, String), String> {
+    /// The endpoint's parts, the password in its query, and the recipient, from their files,
+    /// checked.
+    fn target(&self) -> Result<([Part; 2], String), String> {
         let password = self.password_file.read("BlueBubbles password")?;
         // It goes into the query string as it is, so letters and digits only.
         if !password.bytes().all(|b| b.is_ascii_alphanumeric()) {
@@ -357,8 +255,8 @@ impl BlueBubbles {
                 self.recipient_file.name()
             ));
         }
-        let url = format!("{}/api/v1/message/text?password={password}", self.server.0);
-        Ok((url, to))
+        let endpoint = format!("{}/api/v1/message/text?password=", self.server.0);
+        Ok(([Part::plain(endpoint), Part::secret(password)], to))
     }
 }
 
@@ -397,9 +295,11 @@ impl Channel for BlueBubbles {
             "message": alert.short,
             "method": "apple-script",
         });
-        // No proxy, whatever the environment says: the password is in the URL.
-        self.curl
-            .post("BlueBubbles", &url, &body, &["--noproxy", "*"])
+        // No proxy, whatever the environment says, even over https: the password is in the URL.
+        Request::post("BlueBubbles", url, Body::Json(body))
+            .secret(&to)
+            .no_proxy()
+            .send(&self.curl)
     }
 
     fn ready(&self) -> Result<(), String> {
@@ -605,11 +505,5 @@ mod tests {
             slack_escape("<!channel> & <x>"),
             "&lt;!channel&gt; &amp; &lt;x&gt;"
         );
-    }
-
-    #[test]
-    fn a_quoted_value_survives_quotes_backslashes_and_line_breaks() {
-        assert_eq!(quoted(r#"a"b\c"#), r#""a\"b\\c""#);
-        assert_eq!(quoted("a\nb"), r#""a\nb""#);
     }
 }
