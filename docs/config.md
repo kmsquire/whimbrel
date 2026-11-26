@@ -849,8 +849,9 @@ the password is in the URL.
 
 ### `print`
 
-The `print` channel writes each alert to stdout. Use it to try out a config file. In a dry run,
-whimbrel replaces every real channel with a `print` channel that has the same name and form.
+The `print` channel writes the full form of each alert to stdout. Use it to try out a config
+file. A dry run sends nothing through any channel: it prints what each channel would be sent, in
+that channel's form.
 
 ```toml
 [[channel]]

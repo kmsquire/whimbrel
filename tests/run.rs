@@ -1,13 +1,39 @@
-//! The binary end to end: a config, a stand-in df, and the print channel, so nothing sends.
+//! One run, from a config with a stand-in df and the print channel, so nothing sends. Most tests
+//! call the run in-process, with a channel that keeps what it's sent in place of print, and read
+//! the report it returns. The rest, about the config file, stderr and the log file, run the
+//! binary.
 
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use whimbrel::StateDir;
+use whimbrel::config::Config;
+use whimbrel::run::{Ended, Exit, Report, run};
+use whimbrel::{Alert, Channel, Mode, StateDir};
 
 mod common;
+
+/// When every in-process run happens: 2026-11-18T11:06:40Z.
+const NOW: u64 = 1_795_000_000;
+const AT: &str = "2026-11-18T11:06:40Z";
+
+/// Stands in for the print channel, and keeps the full form of each alert it's sent.
+#[derive(Default)]
+struct Kept {
+    sent: Vec<String>,
+}
+
+impl Channel for Kept {
+    fn name(&self) -> &str {
+        "print"
+    }
+
+    fn send(&mut self, alert: &Alert) -> Result<(), String> {
+        self.sent.push(alert.full.clone());
+        Ok(())
+    }
+}
 
 struct Host {
     dir: tempfile::TempDir,
@@ -82,6 +108,38 @@ impl Host {
         p
     }
 
+    fn load(&self) -> Config {
+        Config::load(&self.path("config.toml")).unwrap()
+    }
+
+    /// One run in-process, with [`Kept`] in place of the print channel: its report, and what
+    /// print was sent.
+    fn run(&self, mode: Mode) -> (Report, Vec<String>) {
+        let config = self.load();
+        let mut kept = Kept::default();
+        let mut others = config.build_channels();
+        let mut refs: Vec<&mut dyn Channel> = Vec::new();
+        let mut print = Some(&mut kept);
+        for c in &mut others {
+            if c.name() == "print" {
+                refs.push(print.take().expect("one print channel"));
+            } else {
+                refs.push(&mut **c);
+            }
+        }
+        let report = run(
+            &config,
+            &self.path("config.toml"),
+            "whimbrel",
+            mode,
+            NOW,
+            &mut refs,
+            |report| report,
+        );
+        drop(refs);
+        (report, kept.sent)
+    }
+
     fn whimbrel(&self, command: &str) -> Output {
         Command::new(env!("CARGO_BIN_EXE_whimbrel"))
             .args([command, "--config"])
@@ -130,13 +188,29 @@ fn running_as_root() -> bool {
 fn a_run_sends_what_changed_keeps_the_ledger_and_logs_one_line() {
     let h = Host::new();
     h.at(85);
+    let (report, sent) = h.run(Mode::Run);
+    assert_eq!(report.exit(), Exit::Ran);
+    assert_eq!(
+        sent,
+        ["No rush, but something needs a look:\nThe test host's disk is 85% full. See `df -h /`."]
+    );
+    assert!(h.state().join("ledger.json").exists());
+    assert_eq!(
+        report.log_line().unwrap(),
+        format!("{AT} WARN disk=WARN alerting=OK; print: sent")
+    );
+}
+
+#[test]
+fn the_binary_prints_what_print_is_sent_and_logs_the_line() {
+    let h = Host::new();
+    h.at(85);
     let out = h.whimbrel("run");
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
         "No rush, but something needs a look:\nThe test host's disk is 85% full. See `df -h /`.\n"
     );
-    assert!(h.state().join("ledger.json").exists());
     assert_eq!(h.last_log_line(), "WARN disk=WARN alerting=OK; print: sent");
 }
 
@@ -144,20 +218,19 @@ fn a_run_sends_what_changed_keeps_the_ledger_and_logs_one_line() {
 fn a_second_run_with_nothing_new_sends_nothing() {
     let h = Host::new();
     h.at(85);
-    h.whimbrel("run");
-    let out = h.whimbrel("run");
-    assert_eq!(stdout(&out), "");
+    h.run(Mode::Run);
+    let (report, sent) = h.run(Mode::Run);
+    assert_eq!(sent, Vec::<String>::new());
     assert_eq!(
-        h.last_log_line(),
-        "WARN disk=WARN alerting=OK; print: no change"
+        report.log_line().unwrap(),
+        format!("{AT} WARN disk=WARN alerting=OK; print: no change")
     );
-    assert_eq!(h.log().lines().count(), 2);
 }
 
 #[test]
 fn a_missing_state_directory_is_made_owner_only() {
     let h = Host::new();
-    h.whimbrel("run");
+    h.run(Mode::Run);
     assert_eq!(mode(&h.state()), 0o700);
 }
 
@@ -167,17 +240,17 @@ fn a_state_directory_others_can_write_is_refused_and_logged() {
         let h = Host::new();
         fs::create_dir(h.state()).unwrap();
         fs::set_permissions(h.state(), fs::Permissions::from_mode(bits)).unwrap();
-        let out = h.whimbrel("run");
-        assert_eq!(out.status.code(), Some(2), "{bits:o}");
+        let (report, _) = h.run(Mode::Run);
+        assert_eq!(report.exit(), Exit::NotStarted, "{bits:o}");
         let why = format!(
             "{} can be written by other accounts ({bits:o}); it should be 700",
             h.state().display()
         );
-        assert_eq!(stderr(&out), format!("whimbrel: {why}\n"));
+        assert_eq!(report.complaint(), Some(why.clone()));
         // What a health check that greps the log for "alert failed" sees.
         assert_eq!(
-            h.last_log_line(),
-            format!("alert failed: couldn't start: {why}")
+            report.log_line().unwrap(),
+            format!("{AT} alert failed: couldn't start: {why}")
         );
     }
 }
@@ -187,14 +260,11 @@ fn a_state_directory_that_belongs_to_another_account_is_refused() {
     let h = Host::new();
     let theirs = h.theirs("theirs", true);
     h.config_with_state(&theirs, "");
-    let out = h.whimbrel("run");
-    assert_eq!(out.status.code(), Some(2));
+    let (report, _) = h.run(Mode::Run);
+    assert_eq!(report.exit(), Exit::NotStarted);
     assert_eq!(
-        stderr(&out),
-        format!(
-            "whimbrel: {} belongs to another account\n",
-            theirs.display()
-        )
+        report.complaint(),
+        Some(format!("{} belongs to another account", theirs.display()))
     );
 }
 
@@ -252,6 +322,26 @@ fn a_symlink_in_place_of_the_log_is_never_written_through() {
 fn a_dry_run_says_what_each_channel_would_be_sent_and_changes_nothing() {
     let h = Host::new();
     h.at(92);
+    let (report, sent) = h.run(Mode::DryRun);
+    assert_eq!(report.exit(), Exit::Ran);
+    assert_eq!(
+        report.printout(),
+        "FAIL disk=FAIL alerting=OK\n\n\
+         print would be sent:\nNeeds you soon:\nThe test host's disk is 92% full. See `df -h /`.\n"
+    );
+    assert_eq!(
+        sent,
+        Vec::<String>::new(),
+        "a dry run sent through the channel"
+    );
+    assert!(!h.state().exists(), "a dry run made the state directory");
+    assert_eq!(report.log_line(), None);
+}
+
+#[test]
+fn the_binary_prints_a_dry_runs_printout_and_writes_no_log() {
+    let h = Host::new();
+    h.at(92);
     let out = h.whimbrel("dry-run");
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(
@@ -259,7 +349,6 @@ fn a_dry_run_says_what_each_channel_would_be_sent_and_changes_nothing() {
         "FAIL disk=FAIL alerting=OK\n\n\
          print would be sent:\nNeeds you soon:\nThe test host's disk is 92% full. See `df -h /`.\n"
     );
-    assert!(!h.state().exists(), "a dry run made the state directory");
     assert_eq!(h.log(), "");
 }
 
@@ -267,12 +356,12 @@ fn a_dry_run_says_what_each_channel_would_be_sent_and_changes_nothing() {
 fn a_dry_run_after_a_run_with_nothing_new_says_so_and_takes_no_lock() {
     let h = Host::new();
     h.at(92);
-    h.whimbrel("run");
+    h.run(Mode::Run);
     fs::remove_file(h.state().join("lock")).unwrap();
     let before = fs::read(h.state().join("ledger.json")).unwrap();
-    let out = h.whimbrel("dry-run");
+    let (report, _) = h.run(Mode::DryRun);
     assert_eq!(
-        stdout(&out),
+        report.printout(),
         "FAIL disk=FAIL alerting=OK\n\nprint: no change since it was last told.\n"
     );
     assert_eq!(fs::read(h.state().join("ledger.json")).unwrap(), before);
@@ -287,12 +376,14 @@ fn a_failed_send_is_logged_as_alert_failed_and_the_run_still_succeeds() {
         h.path("no-such-webhook")
     ));
     h.at(85);
-    let out = h.whimbrel("run");
-    assert_eq!(out.status.code(), Some(0));
+    let (report, _) = h.run(Mode::Run);
+    assert_eq!(report.exit(), Exit::Ran);
     assert_eq!(
-        h.last_log_line(),
-        "WARN disk=WARN alerting=WARN; print: sent; \
-         slack: alert failed: can't read the Slack webhook file no-such-webhook (entity not found)"
+        report.log_line().unwrap(),
+        format!(
+            "{AT} WARN disk=WARN alerting=WARN; print: sent; \
+             slack: alert failed: can't read the Slack webhook file no-such-webhook (entity not found)"
+        )
     );
 }
 
@@ -303,27 +394,26 @@ fn a_channel_that_cant_send_is_reported_through_the_others() {
         "[[channel]]\nkind = \"slack\"\nwebhook_file = {:?}\n",
         h.path("no-such-webhook")
     ));
-    let out = h.whimbrel("run");
-    let said = stdout(&out);
+    let (report, sent) = h.run(Mode::Run);
     let sentence = format!(
         "Alerts can't get to slack: can't read the Slack webhook file no-such-webhook \
-         (entity not found). See `{} dry-run --config {}`.",
-        env!("CARGO_BIN_EXE_whimbrel").rsplit('/').next().unwrap(),
+         (entity not found). See `whimbrel dry-run --config {}`.",
         h.path("config.toml").display()
     );
     assert_eq!(
-        said,
-        format!("No rush, but something needs a look:\n{sentence}\n")
+        sent,
+        [format!("No rush, but something needs a look:\n{sentence}")]
     );
     assert_eq!(
         whimbrel::sentence::breaks("alerting", &sentence),
         Vec::<String>::new()
     );
+    let line = report.log_line().unwrap();
     assert!(
-        h.last_log_line()
-            .starts_with("WARN disk=OK alerting=WARN; print: sent; slack: alert failed"),
-        "{}",
-        h.last_log_line()
+        line.starts_with(&format!(
+            "{AT} WARN disk=OK alerting=WARN; print: sent; slack: alert failed"
+        )),
+        "{line}"
     );
     // Fixed, it says so.
     let hook = h.path("no-such-webhook");
@@ -333,11 +423,11 @@ fn a_channel_that_cant_send_is_reported_through_the_others() {
     )
     .unwrap();
     fs::set_permissions(&hook, fs::Permissions::from_mode(0o600)).unwrap();
-    let out = h.whimbrel("dry-run");
+    let (report, _) = h.run(Mode::DryRun);
     assert!(
-        stdout(&out).starts_with("OK disk=OK alerting=OK\n"),
+        report.printout().starts_with("OK disk=OK alerting=OK\n"),
         "{}",
-        stdout(&out)
+        report.printout()
     );
 }
 
@@ -350,8 +440,8 @@ fn with_no_channels_there_is_nothing_to_report_alerting_on() {
         cfg.replace("[[channel]]\nkind = \"print\"\n", ""),
     )
     .unwrap();
-    let out = h.whimbrel("dry-run");
-    assert_eq!(stdout(&out), "OK disk=OK\n", "{}", stderr(&out));
+    let (report, _) = h.run(Mode::DryRun);
+    assert_eq!(report.printout(), "OK disk=OK\n");
 }
 
 #[test]
@@ -373,9 +463,9 @@ fn a_config_whose_checks_are_refused_leaves_no_state() {
         ),
     ] {
         h.config(extra);
-        let out = h.whimbrel("run");
-        assert_eq!(out.status.code(), Some(2), "{extra}");
-        assert_eq!(stderr(&out), format!("whimbrel: {says}\n"), "{extra}");
+        let (report, _) = h.run(Mode::Run);
+        assert_eq!(report.exit(), Exit::NotStarted, "{extra}");
+        assert_eq!(report.complaint(), Some(says.to_string()), "{extra}");
         assert!(!h.state().exists(), "{extra} touched the state directory");
     }
 }
@@ -388,28 +478,31 @@ fn a_held_lock_stops_a_second_run_quietly() {
     h.at(92);
     let dir = StateDir::new(h.state());
     let _held = dir.lock().unwrap().unwrap();
-    let out = h.whimbrel("run");
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(stdout(&out), "");
+    let (report, sent) = h.run(Mode::Run);
+    assert_eq!(report.exit(), Exit::Ran);
+    assert_eq!(report.ended, Ended::LockedOut(h.state().join("lock")));
+    assert_eq!(sent, Vec::<String>::new());
     assert_eq!(
-        stderr(&out),
-        format!("whimbrel: another run holds {}/lock\n", h.state().display())
+        report.complaint(),
+        Some(format!("another run holds {}/lock", h.state().display()))
     );
-    assert_eq!(h.log(), "");
+    assert_eq!(report.log_line(), None);
 }
 
 #[test]
 fn an_unreadable_ledger_is_set_aside_and_every_channel_is_told() {
     let h = Host::new();
-    h.whimbrel("run");
+    h.run(Mode::Run);
     fs::write(h.state().join("ledger.json"), "{ not json").unwrap();
     h.at(92);
-    let out = h.whimbrel("run");
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let (report, sent) = h.run(Mode::Run);
+    assert_eq!(report.exit(), Exit::Ran);
     assert_eq!(
-        stdout(&out),
-        "I lost track of what I'd told you, so here's everything open now:\n\
-         The test host's disk is 92% full. See `df -h /`.\n"
+        sent,
+        [
+            "I lost track of what I'd told you, so here's everything open now:\n\
+          The test host's disk is 92% full. See `df -h /`."
+        ]
     );
     let aside: Vec<_> = fs::read_dir(h.state())
         .unwrap()
@@ -422,10 +515,10 @@ fn an_unreadable_ledger_is_set_aside_and_every_channel_is_told() {
         "{ not json"
     );
     assert_eq!(
-        h.last_log_line(),
+        report.log_line().unwrap(),
         format!(
-            "FAIL disk=FAIL alerting=OK; print: sent; ledger lost: set aside an unreadable ledger as {}, \
-             and every channel is told",
+            "{AT} FAIL disk=FAIL alerting=OK; print: sent; ledger lost: set aside an unreadable \
+             ledger as {}, and every channel is told",
             h.state().join(&aside[0]).display()
         )
     );
@@ -434,15 +527,15 @@ fn an_unreadable_ledger_is_set_aside_and_every_channel_is_told() {
 #[test]
 fn a_dry_run_leaves_an_unreadable_ledger_where_it_is() {
     let h = Host::new();
-    h.whimbrel("run");
+    h.run(Mode::Run);
     fs::write(h.state().join("ledger.json"), "{ not json").unwrap();
-    let out = h.whimbrel("dry-run");
-    assert_eq!(out.status.code(), Some(2));
+    let (report, _) = h.run(Mode::DryRun);
+    assert_eq!(report.exit(), Exit::NotStarted);
     assert_eq!(
         fs::read_to_string(h.state().join("ledger.json")).unwrap(),
         "{ not json"
     );
-    assert_eq!(h.log().lines().count(), 1, "a dry run wrote the log");
+    assert_eq!(report.log_line(), None, "a dry run would write the log");
 }
 
 #[test]
@@ -487,22 +580,22 @@ fn a_check_cant_take_the_alerting_key_with_or_without_channels() {
         h.path("df")
     );
     h.config(&extra);
-    let with = h.whimbrel("dry-run");
+    let (with, _) = h.run(Mode::DryRun);
     let cfg = fs::read_to_string(h.path("config.toml")).unwrap();
     fs::write(
         h.path("config.toml"),
         cfg.replace("[[channel]]\nkind = \"print\"\n", ""),
     )
     .unwrap();
-    let without = h.whimbrel("dry-run");
-    for out in [with, without] {
-        assert_eq!(out.status.code(), Some(2));
+    let (without, _) = h.run(Mode::DryRun);
+    for report in [with, without] {
+        assert_eq!(report.exit(), Exit::NotStarted);
+        let why = report.complaint().unwrap();
         assert!(
-            stderr(&out).ends_with(
-                ": the key \"alerting\" is whimbrel's own, for its check of the channels\n"
+            why.ends_with(
+                ": the key \"alerting\" is whimbrel's own, for its check of the channels"
             ),
-            "{}",
-            stderr(&out)
+            "{why}"
         );
     }
 }
@@ -517,11 +610,13 @@ fn what_a_secret_pattern_matches_never_leaves_in_an_alert() {
         format!("{cfg}\n[secret_patterns]\npatterns = ['[0-9]+%']\n"),
     )
     .unwrap();
-    let out = h.whimbrel("run");
+    let (_, sent) = h.run(Mode::Run);
     assert_eq!(
-        stdout(&out),
-        "No rush, but something needs a look:\nThe test host's disk is [redacted] full. \
-         See `df -h /`.\n"
+        sent,
+        [
+            "No rush, but something needs a look:\nThe test host's disk is [redacted] full. \
+          See `df -h /`."
+        ]
     );
 }
 
@@ -543,4 +638,28 @@ fn a_secret_pattern_that_wont_compile_is_refused_without_repeating_it() {
         stderr(&out)
     );
     assert!(!stderr(&out).contains("sekrit"));
+}
+
+#[test]
+fn the_report_is_rendered_while_the_run_still_holds_the_lock() {
+    let h = Host::new();
+    h.run(Mode::Run);
+    let config = h.load();
+    let mut kept = Kept::default();
+    let mut refs: Vec<&mut dyn Channel> = vec![&mut kept];
+    let dir = StateDir::new(h.state());
+    let held_while_rendering = run(
+        &config,
+        &h.path("config.toml"),
+        "whimbrel",
+        Mode::Run,
+        NOW,
+        &mut refs,
+        |_| dir.lock().unwrap().is_none(),
+    );
+    assert!(
+        held_while_rendering,
+        "the lock was free while the report was rendered"
+    );
+    assert!(dir.lock().unwrap().is_some(), "the lock outlived the run");
 }
