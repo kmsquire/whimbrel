@@ -668,6 +668,22 @@ fn an_unreadable_directory_of_other_logs_is_unscanned() {
 }
 
 #[test]
+fn a_rotation_compressed_with_anything_but_gzip_is_unscanned_never_clean() {
+    for ext in ["xz", "bz2", "zst", "lz4", "lzma", "lzo", "Z"] {
+        let m = Machine::new();
+        // Its bytes as read raw: compressed, a token in it would match nothing.
+        m.log(&format!("syslog.2.{ext}"), "ordinary line\n");
+        assert_eq!(
+            m.run().first_what(),
+            unscanned(&format!(
+                "syslog.2.{ext} (compressed in a form it can't read)"
+            )),
+            "{ext}"
+        );
+    }
+}
+
+#[test]
 fn a_truncated_gz_is_unscanned_not_a_crash() {
     let m = Machine::new();
     let whole = gz(&format!("{}\n", common::token()).repeat(50));
