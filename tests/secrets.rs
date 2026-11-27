@@ -403,6 +403,53 @@ fn a_journalctl_that_dies_is_unscanned_and_leaves_the_record_alone() {
 }
 
 #[test]
+fn a_journal_record_that_cant_be_parsed_is_unscanned_never_clear_and_is_left_alone() {
+    let m = Machine::new();
+    m.journal(&format!("{}\n", common::token()));
+    assert_eq!(m.run().level, Level::Fail);
+    // The leak was an earlier boot's, so this boot, read from its start, has no hits.
+    m.journal("--boot--\nordinary\n");
+    // Cut short, as a full disk or a stray edit would leave it.
+    let whole = fs::read(m.record()).unwrap();
+    fs::write(m.record(), &whole[..whole.len() - 1]).unwrap();
+    let before = files(&m.state().join("secrets"));
+    let asked = fs::read_to_string(m.path("args")).unwrap();
+    let f = m.run();
+    assert_eq!(f.level, Level::Warn, "{f:?}");
+    assert!(
+        f.first_what()
+            .contains("journal (its record can't be read: "),
+        "{}",
+        f.first_what()
+    );
+    assert_eq!(files(&m.state().join("secrets")), before);
+    // Without a cursor to read on from, journalctl isn't asked at all.
+    assert_eq!(fs::read_to_string(m.path("args")).unwrap(), asked);
+}
+
+#[test]
+fn a_journal_record_that_cant_be_read_is_unscanned_never_clear() {
+    let m = Machine::new();
+    m.journal(&format!("{}\n", common::token()));
+    m.run();
+    m.journal("--boot--\nordinary\n");
+    // A read that fails, as against a file: a directory in the record's place.
+    fs::remove_file(m.record()).unwrap();
+    fs::create_dir(m.record()).unwrap();
+    let asked = fs::read_to_string(m.path("args")).unwrap();
+    let f = m.run();
+    assert_eq!(f.level, Level::Warn, "{f:?}");
+    assert!(
+        f.first_what()
+            .contains("journal (its record can't be read: "),
+        "{}",
+        f.first_what()
+    );
+    assert!(m.record().is_dir());
+    assert_eq!(fs::read_to_string(m.path("args")).unwrap(), asked);
+}
+
+#[test]
 fn a_dry_run_with_a_refused_cursor_says_so_and_changes_nothing() {
     let m = Machine::new();
     m.journal(&format!("{}\n", common::token()));
@@ -482,10 +529,17 @@ fn with_nowhere_to_keep_the_cursor_a_hit_in_the_journal_is_still_fail_and_counte
 
 #[test]
 fn a_record_that_cant_be_written_is_said_apart_from_a_missing_directory() {
+    // SAFETY: geteuid has no preconditions and can't fail.
+    if unsafe { libc::geteuid() } == 0 {
+        return; // Root writes through a read-only directory.
+    }
     let m = Machine::new();
-    // The directory is there, but a directory sits where the record goes.
-    fs::create_dir_all(m.record()).unwrap();
+    // The directory is there, but nothing can be written in it.
+    let dir = m.state().join("secrets");
+    fs::create_dir_all(&dir).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).unwrap();
     let f = m.run();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(f.level, Level::Warn, "{f:?}");
     assert_eq!(
         f.first_what(),
