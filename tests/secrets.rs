@@ -684,6 +684,18 @@ fn a_rotation_compressed_with_anything_but_gzip_is_unscanned_never_clean() {
 }
 
 #[test]
+fn a_log_named_by_two_settings_is_scanned_once() {
+    let mut m = Machine::new();
+    m.log("syslog", &format!("{}\n", common::token()));
+    // Also matched by optional_logs' `syslog*`.
+    m.logs.push(m.path("logs/syslog"));
+    assert_eq!(
+        m.run().first_what(),
+        found(&[slack("1 in syslog")].join("; "))
+    );
+}
+
+#[test]
 fn a_truncated_gz_is_unscanned_not_a_crash() {
     let m = Machine::new();
     let whole = gz(&format!("{}\n", common::token()).repeat(50));
