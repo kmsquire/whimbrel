@@ -382,7 +382,7 @@ Every check takes the following keys in addition to its own:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `kind` | string | required | One of the kinds in this section. |
-| `key` | string | the kind's name | A name for the check that is stable and unique on this host. Use lowercase letters, digits, and dashes, because the key names the check's own directory under `state_dir`. The key `alerting` is reserved. If you change a key, whimbrel treats the check as new: it reports the check's open problem as recovered and then reports the problem again. |
+| `key` | string | the kind's name | A name for the check that is stable and unique on this host. Use lowercase letters, digits, and dashes, because the key names the check's own directory under `state_dir`. The keys `alerting` and `lock` are reserved. If you change a key, whimbrel treats the check as new: it reports the check's open problem as recovered and then reports the problem again. |
 | `about` | string | per kind | A noun phrase that says what recovered, for the all-clear message. For example, "the disk" or "the nightly backup". |
 
 If you configure two checks of the same kind, give them different keys.

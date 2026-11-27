@@ -163,6 +163,11 @@ fn a_taken_key_is_refused_naming_the_check_that_takes_it() {
             "check 1 (counter): the key \"alerting\" is whimbrel's own, for its check of the \
              channels",
         ),
+        (
+            "[[check]]\nkind = \"counter\"\nkey = \"lock\"\n",
+            "check 1 (counter): the key \"lock\" is whimbrel's own, for the state directory's \
+             lock file",
+        ),
     ] {
         let why = config(d.path(), checks)
             .build_checks_of(&plus(&[COUNTER]))
