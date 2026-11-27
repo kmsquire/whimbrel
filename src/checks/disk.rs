@@ -103,18 +103,6 @@ impl TryFrom<DiskTable> for Disk {
 }
 
 impl Disk {
-    /// The defaults: 80% and 90%, `df` and `du` from PATH, no suspects.
-    pub fn new(path: impl Into<String>) -> Self {
-        Disk {
-            path: path.into(),
-            thresholds: Thresholds::default(),
-            suspects: Vec::new(),
-            df: df(),
-            du: du(),
-            timeout: Duration::from_secs(120),
-        }
-    }
-
     fn percent(&self) -> Option<u8> {
         let out =
             process::run(&self.df, &["-P", "-k", "--", &self.path], b"", self.timeout).ok()?;
