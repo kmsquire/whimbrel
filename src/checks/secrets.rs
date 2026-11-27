@@ -467,12 +467,22 @@ impl Secrets {
     /// if it couldn't, in which case the total stands as it was. A dry run reads from the same
     /// cursor and writes nothing.
     fn journal(&self, state: &CheckDir) -> (Tally, Option<String>) {
-        let saved: Journal = state
-            .read(RECORD)
-            .ok()
-            .flatten()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        // Missing is the first run. Unreadable is not: starting over from this boot would replace
+        // the total, clearing a FAIL, so leave the record for a person and the journal unscanned.
+        let unread = |e: &dyn std::fmt::Display| {
+            (
+                Tally::default(),
+                Some(format!("journal (its record can't be read: {e})")),
+            )
+        };
+        let saved: Journal = match state.read(RECORD) {
+            Ok(None) => Journal::default(),
+            Ok(Some(b)) => match serde_json::from_slice(&b) {
+                Ok(saved) => saved,
+                Err(e) => return unread(&e),
+            },
+            Err(e) => return unread(&e),
+        };
         // A directory that can't be made doesn't stop the read: the hits it finds still count,
         // so a token is a FAIL even then, and only the cursor goes unkept.
         let homeless = state.make().is_err();

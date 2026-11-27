@@ -263,11 +263,19 @@ pub struct CheckDir {
 }
 
 impl CheckDir {
-    /// The file `name` in it, or `None` if there's none.
+    /// The file `name` in it, or `None` if there's none: none either when a file stands where
+    /// the directory goes.
     pub fn read(&self, name: &str) -> io::Result<Option<Vec<u8>>> {
         match fs::read(self.file(name)?) {
             Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                Ok(None)
+            }
             Err(e) => Err(e),
         }
     }
