@@ -281,7 +281,9 @@ fn run_inner<'d>(
             state_dir(&config.state_dir, true).map_err(|e| not_started(&e))?;
             let locked = match dir.lock() {
                 Ok(Some(locked)) => locked,
-                Ok(None) => return Err(Ended::LockedOut(config.state_dir.join("lock"))),
+                Ok(None) => {
+                    return Err(Ended::LockedOut(config.state_dir.join(crate::state::LOCK)));
+                }
                 Err(e) => return Err(not_started(&e)),
             };
             let state = match locked.load() {

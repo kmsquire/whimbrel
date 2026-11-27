@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 
 use crate::ledger::State;
 
+/// The run's lock file, in the state directory.
+pub(crate) const LOCK: &str = "lock";
+
 /// The directory whimbrel keeps its ledger and lock in. Making it, owner-only, is the caller's job.
 pub struct StateDir {
     dir: PathBuf,
@@ -41,8 +44,8 @@ impl StateDir {
             .truncate(false)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(self.dir.join("lock"))
-            .map_err(|e| named(e, &self.dir.join("lock")))?;
+            .open(self.dir.join(LOCK))
+            .map_err(|e| named(e, &self.dir.join(LOCK)))?;
         match f.try_lock() {
             Ok(()) => Ok(Some(Locked { dir: self, lock: f })),
             Err(TryLockError::WouldBlock) => Ok(None),

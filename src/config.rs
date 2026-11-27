@@ -277,6 +277,13 @@ impl Config {
                     alerting::KEY
                 )));
             }
+            // A check's directory is `state_dir/<key>`, and `state_dir/lock` is the run's lock.
+            if check.key == crate::state::LOCK {
+                return Err(refused(format!(
+                    "the key {:?} is whimbrel's own, for the state directory's lock file",
+                    crate::state::LOCK
+                )));
+            }
             if !keys.insert(check.key.clone()) {
                 return Err(refused(format!(
                     "another check has the key {:?}",
