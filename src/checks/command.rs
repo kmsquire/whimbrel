@@ -183,39 +183,6 @@ pub fn account_of(uid: u32) -> Option<Account> {
     lookup(By::Uid(uid))
 }
 
-/// The name of the group with `gid`, if there is one.
-pub fn group_name(gid: u32) -> Option<String> {
-    let mut buf = vec![0 as libc::c_char; 4096];
-    loop {
-        // SAFETY: group is plain data, for which all zeroes is valid.
-        let mut gr: libc::group = unsafe { std::mem::zeroed() };
-        let mut found: *mut libc::group = std::ptr::null_mut();
-        // SAFETY: every pointer is valid for the call, and buf's length is passed with it.
-        let rc = unsafe {
-            libc::getgrgid_r(
-                gid,
-                &raw mut gr,
-                buf.as_mut_ptr(),
-                buf.len(),
-                &raw mut found,
-            )
-        };
-        if rc == libc::ERANGE && buf.len() < 1 << 20 {
-            buf.resize(buf.len() * 2, 0);
-            continue;
-        }
-        if rc != 0 || found.is_null() {
-            return None;
-        }
-        // SAFETY: on success gr's name points into buf, which is still alive.
-        return Some(
-            unsafe { CStr::from_ptr(gr.gr_name) }
-                .to_string_lossy()
-                .into_owned(),
-        );
-    }
-}
-
 fn euid() -> u32 {
     // SAFETY: geteuid has no preconditions and can't fail.
     unsafe { libc::geteuid() }
