@@ -471,6 +471,18 @@ fn a_config_whose_checks_are_refused_leaves_no_state() {
 }
 
 #[test]
+fn a_dry_run_refusing_a_value_with_an_escaped_quote_prints_none_of_it() {
+    let h = Host::new();
+    h.config("[secret_patterns]\nbuiltins = \"ghp_ab\\\"TOPSECRETTAIL\"\n");
+    let out = h.whimbrel("dry-run");
+    let said = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(said.contains("invalid type: string"), "{said}");
+    for part in ["ghp_ab", "TOPSECRETTAIL"] {
+        assert!(!said.contains(part), "{part} leaked: {said}");
+    }
+}
+
+#[test]
 fn a_held_lock_stops_a_second_run_and_logs_that_it_was_skipped() {
     let h = Host::new();
     fs::create_dir(h.state()).unwrap();

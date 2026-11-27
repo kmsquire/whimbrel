@@ -351,8 +351,12 @@ fn holds_url(v: &toml::Value, hosts: &[&str]) -> bool {
 fn scrub(message: &str) -> String {
     let mut out = String::with_capacity(message.len());
     let mut quoted = false;
-    for c in message.chars() {
-        if c == '"' {
+    let mut chars = message.chars();
+    while let Some(c) = chars.next() {
+        // serde quotes a value with Debug, which writes an inner `"` as `\"`.
+        if quoted && c == '\\' {
+            chars.next();
+        } else if c == '"' {
             quoted = !quoted;
             out.push_str(if quoted { "\"…" } else { "\"" });
         } else if !quoted {
@@ -564,6 +568,14 @@ mod tests {
             "unknown variant `…`, expected one of `slack`, `print`"
         );
         assert_eq!(scrub("unknown field `secret`"), "unknown field `secret`");
+    }
+
+    #[test]
+    fn scrubbing_drops_a_value_past_an_escaped_quote() {
+        assert_eq!(
+            scrub(r#"invalid type: string "ab\"TAIL", expected a sequence"#),
+            r#"invalid type: string "…", expected a sequence"#
+        );
     }
 
     #[test]
