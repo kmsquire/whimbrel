@@ -410,6 +410,10 @@ impl Secrets {
         for dir in &self.log_dirs {
             self.walk(dir, &mut files, unread);
         }
+        // One file reached through two settings is scanned once, or its hits count twice. The
+        // first stays where it was, so the order things are said in doesn't change.
+        let mut seen = std::collections::HashSet::new();
+        files.retain(|p| seen.insert(p.clone()));
         files
     }
 
