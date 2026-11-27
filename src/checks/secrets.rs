@@ -430,7 +430,15 @@ impl Secrets {
         if m.len() > self.max_mb.saturating_mul(1024 * 1024) {
             return Err(format!("{name} (over {} MB)", self.max_mb));
         }
-        let gz = path.extension().is_some_and(|e| e == "gz");
+        let ext = path.extension().and_then(|e| e.to_str());
+        // Read raw, a rotation compressed another way would match nothing and pass as clean.
+        if matches!(
+            ext,
+            Some("xz" | "bz2" | "zst" | "lz4" | "lzma" | "lzo" | "Z")
+        ) {
+            return Err(format!("{name} (compressed in a form it can't read)"));
+        }
+        let gz = ext == Some("gz");
         self.count_opened(f, m.len(), gz, name, hit)
     }
 

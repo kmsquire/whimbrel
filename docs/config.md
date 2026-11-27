@@ -489,7 +489,8 @@ You must set at least one of `logs`, `optional_logs`, `log_dirs`, and `journal`.
 The check reads logs and the journal as follows:
 
 - Rotated logs count as one log. For example, `syslog`, `syslog.1`, and `syslog.2.gz` are all
-  "syslog". whimbrel decompresses `.gz` files as it reads them.
+  "syslog". whimbrel decompresses `.gz` files as it reads them. It can't read `.xz`, `.bz2`,
+  `.zst`, `.lz4`, `.lzma`, `.lzo` or `.Z` files, so it reports them as unscanned.
 - whimbrel matches a log one line at a time, up to 1 MiB of a line at once. It reads a longer line
   in 1 MiB pieces and counts each piece as a separate line. It doesn't find a token that spans two
   pieces, or a token that a program wrapped across two lines.
