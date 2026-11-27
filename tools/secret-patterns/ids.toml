@@ -205,9 +205,6 @@
 "runpod-api-key-1" = { source = "betterleaks", rule = "runpod-api-key.1" }
 "salesforceoauth2access-token" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2access tokenRe" }
 "salesforceoauth2client-client-id" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2client clientIDRe" }
-"salesforceoauth2jwt-client-id" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2jwt clientIDRe" }
-"salesforceoauth2jwt-private-key" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2jwt privateKeyRe" }
-"salesforceoauth2refresh-client-id" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2refresh clientIDRe" }
 "samsara-api-token-1" = { source = "betterleaks", rule = "samsara-api-token.1" }
 "scalingo-api-token" = { source = "gitleaks", rule = "scalingo-api-token" }
 "segment-public-api-token-1" = { source = "betterleaks", rule = "segment-public-api-token.1" }
@@ -268,3 +265,6 @@
 "zuplo-consumer-api-key-1" = { source = "betterleaks", rule = "zuplo-consumer-api-key.1" }
 
 [retired]
+"salesforceoauth2jwt-client-id" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2jwt clientIDRe", last = "0.4.0" }
+"salesforceoauth2jwt-private-key" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2jwt privateKeyRe", last = "0.4.0" }
+"salesforceoauth2refresh-client-id" = { source = "osv-scalibr", rule = "veles/secrets/salesforceoauth2refresh clientIDRe", last = "0.4.0" }
