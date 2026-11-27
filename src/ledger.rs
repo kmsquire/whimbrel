@@ -207,9 +207,18 @@ impl ChannelLedger {
             .map_or(Level::Ok, |t| t.level)
     }
 
-    /// Keep the worst of each problem that's worse than what this channel was told.
+    /// Keep the worst of each problem that's worse than what this channel was told, and lower a
+    /// told count to one that fell, so a rise is measured from the last count seen, not sent.
     fn observe(&mut self, current: &[&CheckResult], frame: &Frame) {
         for r in current {
+            let told = self.told.as_mut().and_then(|d| d.problems.get_mut(&r.key));
+            // Only a count that's there: None sorts below every count.
+            if let Some(t) = told
+                && r.finding.count.is_some()
+                && r.finding.count < t.count
+            {
+                t.count = r.finding.count;
+            }
             if r.finding.level <= self.told_level(&r.key) {
                 continue;
             }

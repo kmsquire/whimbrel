@@ -95,7 +95,8 @@ pub struct Finding {
     /// 85% to 86% is not news.
     pub fingerprint: Option<String>,
     /// A count whose rise is news, though it isn't in the fingerprint: a second leak in a log
-    /// already named, say. A fall isn't news. So a problem that keeps growing is told every run
+    /// already named, say. A fall isn't news, and a rise after it counts from where it fell to,
+    /// not from what was last sent. So a problem that keeps growing is told every run
     /// it grows, an hourly alert for an ongoing leak, on purpose: each one is a new secret out.
     pub count: Option<u64>,
 }
