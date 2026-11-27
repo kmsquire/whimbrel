@@ -173,3 +173,32 @@ fn a_held_lock_stops_a_second_run() {
     drop(held);
     assert!(dir.lock().unwrap().is_some(), "the lock wasn't released");
 }
+
+#[test]
+fn a_lock_let_go_is_free_at_once_even_while_another_thread_starts_programs() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let d = dir();
+    let state = StateDir::new(d.path());
+    let stop = Arc::new(AtomicBool::new(false));
+    // A child gets a copy of every open file until it execs, the lock's included, as a test
+    // running alongside does when it starts a stand-in.
+    let starters: Vec<_> = (0..8)
+        .map(|_| {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = std::process::Command::new("true").status();
+                }
+            })
+        })
+        .collect();
+    let held = (0..20_000)
+        .filter(|_| state.lock().unwrap().is_none())
+        .count();
+    stop.store(true, Ordering::Relaxed);
+    for s in starters {
+        s.join().unwrap();
+    }
+    assert_eq!(held, 0, "the lock was still held after it was let go");
+}

@@ -16,7 +16,7 @@ pub struct StateDir {
 /// the ledger without the lock.
 pub struct Locked<'a> {
     dir: &'a StateDir,
-    _lock: File,
+    lock: File,
 }
 
 impl StateDir {
@@ -44,13 +44,19 @@ impl StateDir {
             .open(self.dir.join("lock"))
             .map_err(|e| named(e, &self.dir.join("lock")))?;
         match f.try_lock() {
-            Ok(()) => Ok(Some(Locked {
-                dir: self,
-                _lock: f,
-            })),
+            Ok(()) => Ok(Some(Locked { dir: self, lock: f })),
             Err(TryLockError::WouldBlock) => Ok(None),
             Err(TryLockError::Error(e)) => Err(e),
         }
+    }
+}
+
+impl Drop for Locked<'_> {
+    /// Let go of the lock itself, not only this copy of the file: a child started meanwhile holds
+    /// a copy until it execs, and closing ours alone would leave the lock held through it.
+    fn drop(&mut self) {
+        // Closing lets go anyway if this fails.
+        let _ = self.lock.unlock();
     }
 }
 
