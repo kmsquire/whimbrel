@@ -358,10 +358,21 @@ impl Secrets {
     /// scanned. `shown`, if any, is handed each line with a hit, with its log and line number,
     /// once the log has been read through: a log it couldn't finish is unscanned, and none of its
     /// lines is shown. When `shown` says to stop, it stops there, and there's no result.
-    fn logs(&self, mut shown: Option<Shown>) -> Option<(BTreeMap<String, Group>, Vec<String>)> {
-        let mut groups: BTreeMap<String, Group> = BTreeMap::new();
+    fn logs(&self, shown: Option<Shown>) -> Option<(BTreeMap<String, Group>, Vec<String>)> {
         let mut unread = Vec::new();
-        for path in self.files(&mut unread) {
+        let files = self.files(&mut unread);
+        self.logs_in(files, unread, shown)
+    }
+
+    /// [`Secrets::logs`], of `files` as they were listed, with what couldn't be listed in `unread`.
+    fn logs_in(
+        &self,
+        files: Vec<PathBuf>,
+        mut unread: Vec<String>,
+        mut shown: Option<Shown>,
+    ) -> Option<(BTreeMap<String, Group>, Vec<String>)> {
+        let mut groups: BTreeMap<String, Group> = BTreeMap::new();
+        for path in files {
             let mut lines: Vec<(u64, Vec<u8>)> = Vec::new();
             let keep = shown.is_some();
             let scanned = self.scan(&path, &mut |n, line| {
@@ -425,8 +436,19 @@ impl Secrets {
         let f = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .map_err(|_| name.clone())?;
+            .open(path);
+        let f = match f {
+            Ok(f) => f,
+            // Found by a pattern or a directory and rotated away before it was opened: it isn't
+            // there to scan, and saying so would be a false WARN, then an all-clear. A log named
+            // in `logs` is meant to be there, so it's still said.
+            Err(e)
+                if e.kind() == io::ErrorKind::NotFound && !self.logs.iter().any(|l| l == path) =>
+            {
+                return Ok(Tally::default());
+            }
+            Err(_) => return Err(name),
+        };
         let m = f.metadata().map_err(|_| name.clone())?;
         if !m.is_file() {
             return Err(format!("{name} (not a regular file)"));
@@ -1150,6 +1172,21 @@ mod tests {
         let (hits, cursor) = read_export(&SecretPatterns::builtins(), &export[..]).unwrap();
         assert_eq!(hits.lines, 2);
         assert_eq!(cursor.as_deref(), Some("s=1;i=2"));
+    }
+
+    #[test]
+    fn a_found_log_gone_by_the_time_its_read_is_skipped_unless_its_one_of_logs() {
+        let d = tempfile::tempdir().unwrap();
+        // Listed, then rotated away before it was opened.
+        let gone = d.path().join("syslog.1");
+        let (_, unread) = secrets(1)
+            .logs_in(vec![gone.clone()], Vec::new(), None)
+            .unwrap();
+        assert_eq!(unread, Vec::<String>::new());
+        let mut required = secrets(1);
+        required.logs = vec![gone.clone()];
+        let (_, unread) = required.logs_in(vec![gone], Vec::new(), None).unwrap();
+        assert_eq!(unread, vec!["syslog.1".to_string()]);
     }
 
     fn secrets(max_mb: u64) -> Secrets {
