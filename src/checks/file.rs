@@ -125,13 +125,10 @@ impl Check for File {
                 ))
                 .fingerprint(bad.join(","));
             return if all_plain {
-                let owner = match self.owner_uid {
-                    0 => "root:root".to_string(),
-                    uid => uid.to_string(),
-                };
+                // A uid alone: the check never compares the group, and macOS has no group named root.
                 finding.to_fix(format!(
-                    "chown {owner} {paths} && chmod {:o} {paths}",
-                    self.mode
+                    "chown {} {paths} && chmod {:o} {paths}",
+                    self.owner_uid, self.mode
                 ))
             } else {
                 finding.see(format!("ls -l {paths}"))
