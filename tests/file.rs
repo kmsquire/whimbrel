@@ -57,10 +57,6 @@ fn a_file_others_can_reach_is_fail_says_so_and_says_how_to_fix_it() {
     let d = tempfile::tempdir().unwrap();
     let a = log(d.path(), "a.log", 0o600);
     let b = log(d.path(), "b.log", 0o640);
-    let owner = match me(d.path()) {
-        0 => "root:root".to_string(),
-        uid => uid.to_string(),
-    };
     let path = b.display();
     assert_eq!(
         check(d.path(), &[a, b.clone()]),
@@ -69,7 +65,7 @@ fn a_file_others_can_reach_is_fail_says_so_and_says_how_to_fix_it() {
                 "Some of the test host's files aren't locked down: other accounts can reach \
                  b.log (mode 640)."
             )
-            .to_fix(format!("chown {owner} {path} && chmod 600 {path}"))
+            .to_fix(format!("chown {} {path} && chmod 600 {path}", me(d.path())))
             .fingerprint(path.to_string())
     );
 }
@@ -124,7 +120,7 @@ fn the_owner_is_root_unless_the_table_says_otherwise() {
             .ends_with(&format!("a.log belongs to uid {}.", me(d.path())))
     );
     assert!(
-        f.sentence(&Default::default()).contains("chown root:root "),
+        f.sentence(&Default::default()).contains("chown 0 "),
         "{f:?}"
     );
 }
