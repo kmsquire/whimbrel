@@ -112,6 +112,8 @@ pub fn left_out(read: usize, picked: usize, left: &[Left]) -> String {
     for l in left {
         let key = if l.why.starts_with("already covered by ") {
             "already covered by a rule taken from an earlier list"
+        } else if l.why.starts_with("the same pattern as ") {
+            "the same pattern as another rule of its list"
         } else {
             &l.why
         };

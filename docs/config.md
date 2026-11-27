@@ -311,9 +311,6 @@ match as written, including Unicode.
 | `runpod-api-key-1` | `\b(rpa_[A-Z0-9]{40}[A-Za-z0-9]{6})` | betterleaks `runpod-api-key.1` |
 | `salesforceoauth2access-token` | `\b00D[0-9A-Za-z]{8,15}![A-Za-z0-9._\-]{30,100}\b` | osv-scalibr `veles/secrets/salesforceoauth2access tokenRe` |
 | `salesforceoauth2client-client-id` | `\b3MVG[a-zA-Z0-9._\-]{20,180}\b` | osv-scalibr `veles/secrets/salesforceoauth2client clientIDRe` |
-| `salesforceoauth2jwt-client-id` | `\b3MVG[a-zA-Z0-9._\-]{20,180}\b` | osv-scalibr `veles/secrets/salesforceoauth2jwt clientIDRe` |
-| `salesforceoauth2jwt-private-key` | `(?s)-----BEGIN (?:OPENSSH\|RSA\|DSA\|EC\|ED25519\|ENCRYPTED)? ?PRIVATE KEY-----.*?-----END (?:OPENSSH\|RSA\|DSA\|EC\|ED25519\|ENCRYPTED)? ?PRIVATE KEY-----` | osv-scalibr `veles/secrets/salesforceoauth2jwt privateKeyRe` |
-| `salesforceoauth2refresh-client-id` | `\b3MVG[a-zA-Z0-9._\-]{20,180}\b` | osv-scalibr `veles/secrets/salesforceoauth2refresh clientIDRe` |
 | `samsara-api-token-1` | `\b(samsara_api_[A-Za-z0-9]{26,32})` | betterleaks `samsara-api-token.1` |
 | `scalingo-api-token` | `\b(tk-us-[\w-]{48})` | gitleaks `scalingo-api-token` |
 | `segment-public-api-token-1` | `\b(sgp_[A-Za-z0-9]{64})` | betterleaks `segment-public-api-token.1` |

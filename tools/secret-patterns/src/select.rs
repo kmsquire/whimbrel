@@ -97,7 +97,7 @@ pub fn select(items: Vec<Item>, changes: &Changes) -> Result<Selection, String> 
 
 /// The token compiled, if the selection rule takes it, or why it doesn't. `taken` is every rule
 /// taken so far, each by `<list>:<rule>`; one from another list that matches an example of the
-/// token already covers it.
+/// token already covers it, and one of its own list with the same pattern is the same rule.
 fn judge(source: &str, core: &str, taken: &[(String, Regex)]) -> Result<Regex, String> {
     let re = Regex::new(core).map_err(|e| match e {
         regex::Error::CompiledTooBig(_) => "too big for Rust's regex".to_string(),
@@ -139,6 +139,11 @@ fn judge(source: &str, core: &str, taken: &[(String, Regex)]) -> Result<Regex, S
         .find(|(by, t)| !by.starts_with(&own) && t.is_match(&line))
     {
         return Err(format!("already covered by {by}"));
+    }
+    // Its own list's rules are let through above, but one list can hold one pattern under two
+    // rules, and taking both reports one secret under two names.
+    if let Some((by, _)) = taken.iter().find(|(_, t)| t.as_str() == re.as_str()) {
+        return Err(format!("the same pattern as {by}"));
     }
     Ok(re)
 }
@@ -238,6 +243,21 @@ mod tests {
             Some("already covered by gitleaks:abc")
         );
         assert!(judge("gitleaks", same, &taken).is_ok());
+    }
+
+    #[test]
+    fn a_rule_the_same_as_one_its_own_list_has_taken_is_left_out() {
+        let same = r"\b(abc_[a-z0-9]{20})";
+        let taken = [("osv-scalibr:a".to_string(), Regex::new(same).unwrap())];
+        assert_eq!(
+            judge("osv-scalibr", same, &taken).err().as_deref(),
+            Some("the same pattern as osv-scalibr:a")
+        );
+        // From another list, it's covered, as any match is.
+        assert_eq!(
+            judge("gitleaks", same, &taken).err().as_deref(),
+            Some("already covered by osv-scalibr:a")
+        );
     }
 
     fn rule(source: &str, rule: &str, core: &str) -> Item {

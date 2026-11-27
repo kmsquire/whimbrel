@@ -5,7 +5,7 @@
 Every rule of the pinned lists that the selection rule in `src/secret_patterns.rs` leaves out,
 and why, in the order the lists are read. A source bump shows up here as a diff.
 
-The lists have 833 rules. The built-ins take 260 and leave 573:
+The lists have 833 rules. The built-ins take 257 and leave 576:
 
 - 370: a keyword comes before the token
 - 126: already covered by a rule taken from an earlier list
@@ -13,6 +13,7 @@ The lists have 833 rules. The built-ins take 260 and leave 573:
 - 29: can match fewer than 16 characters
 - 6: too big for Rust's regex
 - 4: its pattern is built by Go code, not one literal, so the tool can't read it
+- 3: the same pattern as another rule of its list
 - 2: it has no regex for what's in a file
 - 2: it's one fixed string, not a shape
 - 1: doesn't compile in Rust: error: repetition operator missing expression
@@ -572,7 +573,10 @@ The lists have 833 rules. The built-ins take 260 and leave 573:
 | osv-scalibr | `veles/secrets/rubygemsapikey keyRe` | already covered by gitleaks:rubygems-api-token |
 | osv-scalibr | `veles/secrets/salesforceoauth2client clientSecretRe` | a keyword comes before the token |
 | osv-scalibr | `veles/secrets/salesforceoauth2client instanceURLRe` | doesn't start with a literal of 3 or more characters |
+| osv-scalibr | `veles/secrets/salesforceoauth2jwt clientIDRe` | the same pattern as osv-scalibr:veles/secrets/salesforceoauth2client clientIDRe |
 | osv-scalibr | `veles/secrets/salesforceoauth2jwt usernameRe` | too big for Rust's regex |
+| osv-scalibr | `veles/secrets/salesforceoauth2jwt privateKeyRe` | the same pattern as osv-scalibr:veles/secrets/privatekey blockRe |
+| osv-scalibr | `veles/secrets/salesforceoauth2refresh clientIDRe` | the same pattern as osv-scalibr:veles/secrets/salesforceoauth2client clientIDRe |
 | osv-scalibr | `veles/secrets/salesforceoauth2refresh clientSecretRe` | a keyword comes before the token |
 | osv-scalibr | `veles/secrets/salesforceoauth2refresh refreshRe` | a keyword comes before the token |
 | osv-scalibr | `veles/secrets/sendgrid keyRe` | already covered by gitleaks:sendgrid-api-token |

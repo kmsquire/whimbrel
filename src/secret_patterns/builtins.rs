@@ -1407,27 +1407,6 @@ pub const BUILTINS: &[Shape] = &[
         changed: None,
     },
     Shape {
-        id: "salesforceoauth2jwt-client-id",
-        source: "osv-scalibr",
-        rule: "veles/secrets/salesforceoauth2jwt clientIDRe",
-        pattern: r#"\b3MVG[a-zA-Z0-9._\-]{20,180}\b"#,
-        changed: None,
-    },
-    Shape {
-        id: "salesforceoauth2jwt-private-key",
-        source: "osv-scalibr",
-        rule: "veles/secrets/salesforceoauth2jwt privateKeyRe",
-        pattern: r#"(?s)-----BEGIN (?:OPENSSH|RSA|DSA|EC|ED25519|ENCRYPTED)? ?PRIVATE KEY-----.*?-----END (?:OPENSSH|RSA|DSA|EC|ED25519|ENCRYPTED)? ?PRIVATE KEY-----"#,
-        changed: None,
-    },
-    Shape {
-        id: "salesforceoauth2refresh-client-id",
-        source: "osv-scalibr",
-        rule: "veles/secrets/salesforceoauth2refresh clientIDRe",
-        pattern: r#"\b3MVG[a-zA-Z0-9._\-]{20,180}\b"#,
-        changed: None,
-    },
-    Shape {
         id: "samsara-api-token-1",
         source: "betterleaks",
         rule: "samsara-api-token.1",
@@ -1837,4 +1816,8 @@ pub const BUILTINS: &[Shape] = &[
 
 /// Ids that named a built-in in an earlier release, each with the last release that had it.
 /// `disable` accepts them, and they turn nothing off.
-pub const RETIRED: &[(&str, &str)] = &[];
+pub const RETIRED: &[(&str, &str)] = &[
+    ("salesforceoauth2jwt-client-id", "0.4.0"),
+    ("salesforceoauth2jwt-private-key", "0.4.0"),
+    ("salesforceoauth2refresh-client-id", "0.4.0"),
+];
