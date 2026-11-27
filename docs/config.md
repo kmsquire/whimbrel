@@ -555,7 +555,8 @@ Earlier boots aren't read, and the alert's count of the journal includes them si
 - **Default `about`:** "the secrets scan"
 - **News:** Another log has hits, or the total count rises. An ongoing leak therefore causes an
   alert on every run in which the count grows. A different pattern matching in a log that already
-  has hits isn't news by itself; it's news when it raises the count.
+  has hits isn't news by itself; it's news when it raises the count. A count that falls, as when
+  a rotated log is deleted, isn't news, and a rise after it counts from where it fell to.
 
 ### `journald-drops`
 

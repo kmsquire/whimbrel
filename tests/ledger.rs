@@ -265,9 +265,32 @@ fn a_count_that_rises_is_news_and_one_that_falls_isnt() {
         &hour,
         "Needs you soon:\nA secret turned up in app.log. See `grep -c token app.log`.",
     );
-    // Lower than told, as when a rotated log is deleted, and then back up to it: neither is news.
+    // Lower than told, as when a rotated log is deleted: not news.
     w.quiet(&[scan_counting(1)]);
+}
+
+#[test]
+fn a_count_that_rises_after_it_fell_is_news_measured_from_where_it_fell_to() {
+    let mut w = World::new();
+    w.run(&[scan_counting(5)]);
+    // A rotation holding three is deleted, then one more: falling only, so nothing is sent.
     w.quiet(&[scan_counting(2)]);
+    w.quiet(&[scan_counting(1)]);
+    // Three new hits, still below the five that were told.
+    let hour = w.run(&[scan_counting(4)]);
+    assert_says(
+        &hour,
+        "Needs you soon:\nA secret turned up in app.log. See `grep -c token app.log`.",
+    );
+}
+
+#[test]
+fn a_run_with_no_count_leaves_the_told_count_alone() {
+    let mut w = World::new();
+    w.run(&[scan_counting(5)]);
+    w.quiet(&[scan_finding(&["app.log"]).stamped("scan", "the secrets scan")]);
+    // Still below the five that were told: no count isn't a count of none.
+    w.quiet(&[scan_counting(4)]);
 }
 
 #[test]
